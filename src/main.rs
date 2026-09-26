@@ -41,7 +41,20 @@ pub fn tokenize(src: &str) -> Vec<Token> {
             });
             continue;
         }
-        if b"+-*/()".contains(&c) {
+        // 2文字の記号
+        let rest = &src[i..];
+        if let Some(op) = ["==", "!=", "<=", ">="]
+            .iter()
+            .find(|op| rest.starts_with(**op))
+        {
+            toks.push(Token {
+                kind: TokenKind::Punct(op.to_string()),
+                pos: i,
+            });
+            i += 2;
+            continue;
+        }
+        if b"+-*/()<>".contains(&c) {
             toks.push(Token {
                 kind: TokenKind::Punct((c as char).to_string()),
                 pos: i,
@@ -64,6 +77,10 @@ pub enum BinOp {
     Sub,
     Mul,
     Div,
+    Eq,
+    Ne,
+    Lt,
+    Le,
 }
 
 #[derive(Debug)]
@@ -128,13 +145,49 @@ impl<'a> Parser<'a> {
     }
 
     fn expr(&mut self) -> Node {
+        self.equality()
+    }
+
+    fn equality(&mut self) -> Node {
+        let mut node = self.relational();
+
+        loop {
+            if self.consume("==") {
+                node = bin(BinOp::Eq, node, self.relational());
+            } else if self.consume("!=") {
+                node = bin(BinOp::Ne, node, self.relational());
+            } else {
+                return node;
+            }
+        }
+    }
+
+    fn relational(&mut self) -> Node {
+        let mut node = self.add();
+
+        loop {
+            if self.consume("<") {
+                node = bin(BinOp::Lt, node, self.add());
+            } else if self.consume("<=") {
+                node = bin(BinOp::Le, node, self.add());
+            } else if self.consume(">") {
+                node = bin(BinOp::Lt, self.add(), node);
+            } else if self.consume(">=") {
+                node = bin(BinOp::Le, self.add(), node);
+            } else {
+                return node;
+            }
+        }
+    }
+
+    fn add(&mut self) -> Node {
         let mut node = self.mul();
 
         loop {
             if self.consume("+") {
-                node = bin(BinOp::Add, node, self.mul())
+                node = bin(BinOp::Add, node, self.mul());
             } else if self.consume("-") {
-                node = bin(BinOp::Sub, node, self.mul())
+                node = bin(BinOp::Sub, node, self.mul());
             } else {
                 return node;
             }
@@ -142,17 +195,27 @@ impl<'a> Parser<'a> {
     }
 
     fn mul(&mut self) -> Node {
-        let mut node = self.primary();
+        let mut node = self.unary();
 
         loop {
             if self.consume("*") {
-                node = bin(BinOp::Mul, node, self.primary())
+                node = bin(BinOp::Mul, node, self.unary())
             } else if self.consume("/") {
-                node = bin(BinOp::Div, node, self.primary())
+                node = bin(BinOp::Div, node, self.unary())
             } else {
                 return node;
             }
         }
+    }
+
+    fn unary(&mut self) -> Node {
+        if self.consume("+") {
+            return self.unary();
+        }
+        if self.consume("-") {
+            return bin(BinOp::Sub, Node::Num(0), self.unary());
+        }
+        self.primary()
     }
 
     fn primary(&mut self) -> Node {
@@ -187,6 +250,17 @@ fn gen_expr(node: &Node) {
         BinOp::Div => {
             println!("  cqo\n");
             println!("  idiv rdi\n");
+        }
+        BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le => {
+            let set = match op {
+                BinOp::Eq => "sete",
+                BinOp::Ne => "setne",
+                BinOp::Lt => "setl",
+                _ => "setle",
+            };
+            println!("  cmp rax, rdi");
+            println!("  {} al", set);
+            println!("  movzb rax, al");
         }
     }
 
