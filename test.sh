@@ -11,6 +11,11 @@ int sub(int x, int y) { return x - y; }
 int add6(int a, int b, int c, int d, int e, int f) { return a + b + c + d + e + f; }
 // 呼び出し元が rsp を 16 バイトにそろえていれば 1 を返す
 int aligned() { return (long)__builtin_frame_address(0) % 16 == 0; }
+#include <stdlib.h>
+void alloc4(int **p, int a, int b, int c, int d) {
+  *p = malloc(sizeof(int) * 4);
+  (*p)[0] = a; (*p)[1] = b; (*p)[2] = c; (*p)[3] = d;
+}
 EOF
 
 assert() {
@@ -130,8 +135,8 @@ assert 3 "int main() { return later(); } int later() { return 3; }"
 
 # ステップ16：単項 & と単項 *
 assert 3 "int main() { int x; int *y; x=3; y=&x; return *y; }"
-assert 3 "int main() { int x; int y; int *z; x=3; y=5; z=&y+8; return *z; }"
-assert 5 "int main() { int x; int y; int *z; x=3; y=5; z=&x-8; return *z; }"
+assert 3 "int main() { int x; int y; int *z; x=3; y=5; z=&y+2; return *z; }"
+assert 5 "int main() { int x; int y; int *z; x=3; y=5; z=&x-2; return *z; }"
 assert 7 "int main() { int x; int *y; x=3; y=&x; *y=7; return x; }"
 assert 9 "int main() { int x; int *y; int **z; x=3; y=&x; z=&y; **z=9; return x; }"
 assert 3 "int main() { int x; x=3; return *&x; }"
@@ -151,5 +156,16 @@ assert 3 "int main() { int x; int *y; int **z; x=3; y=&x; z=&y; return **z; }"
 assert 11 "int main() { int a; int *p; int **pp; a=1; p=&a; pp=&p; *p=5; **pp=**pp+6; return a; }"
 assert 4 "int deref(int *p) { return *p; } int main() { int x; x=4; return deref(&x); }"
 assert 8 "int set2(int **pp, int v) { **pp = v; return 0; } int main() { int x; int *p; p=&x; set2(&p, 8); return x; }"
+
+# ステップ19：ポインタの加算と減算
+assert 4 "int main() { int *p; alloc4(&p, 1, 2, 4, 8); int *q; q = p + 2; return *q; }"
+assert 8 "int main() { int *p; alloc4(&p, 1, 2, 4, 8); int *q; q = p + 3; return *q; }"
+assert 2 "int main() { int *p; alloc4(&p, 1, 2, 4, 8); int *q; q = p + 3; q = q - 2; return *q; }"
+assert 8 "int main() { int *p; alloc4(&p, 1, 2, 4, 8); return *(p + 3); }"
+assert 4 "int main() { int *p; alloc4(&p, 1, 2, 4, 8); return *(2 + p); }"
+assert 3 "int main() { int *p; alloc4(&p, 1, 2, 4, 8); return (p + 3) - p; }"
+assert 15 "int main() { int *p; alloc4(&p, 1, 2, 4, 8); *(p + 1) = 10; return *p + *(p + 1) + *(p + 2); }"
+assert 2 "int main() { int x; x = -3; return x + 5; }"
+assert 1 "int main() { return sub(3, 5) < 0; }"
 
 echo OK

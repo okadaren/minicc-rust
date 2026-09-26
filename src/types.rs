@@ -1,4 +1,4 @@
-use crate::parse::Node;
+use crate::parse::{BinOp, Node};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Type {
@@ -9,6 +9,13 @@ pub enum Type {
 impl Type {
     pub fn pointer_to(base: Type) -> Type {
         Type::Ptr(Box::new(base))
+    }
+
+    pub fn size(&self) -> i64 {
+        match self {
+            Type::Int => 4,
+            Type::Ptr(_) => 8,
+        }
     }
 }
 
@@ -21,6 +28,10 @@ pub fn type_of(node: &Node) -> Type {
             Type::Int => unreachable!(),
         },
         Node::Assign(lhs, _) => type_of(lhs),
+        Node::Binary(BinOp::Add | BinOp::Sub, lhs, _) => match type_of(lhs) {
+            ty @ Type::Ptr(_) => ty,
+            Type::Int => Type::Int,
+        },
         _ => Type::Int,
     }
 }

@@ -48,7 +48,7 @@ struct LVar {
 
 pub struct Function {
     pub name: String,
-    pub params: Vec<i64>,
+    pub params: Vec<(i64, Type)>,
     pub body: Vec<Node>,
     pub stack_size: i64,
 }
@@ -176,7 +176,8 @@ impl<'a> Parser<'a> {
             let ty = self.parse_type();
             let pos = self.peek().pos;
             let param = self.expect_ident("argument name");
-            params.push(self.declare_var(param, ty, pos));
+            let offset = self.declare_var(param, ty.clone(), pos);
+            params.push((offset, ty));
         }
         if params.len() > 6 {
             error_at(self.src, pos, "arguments limit is 6");
@@ -334,13 +335,52 @@ impl<'a> Parser<'a> {
         let mut node = self.mul();
 
         loop {
+            let pos = self.peek().pos;
             if self.consume("+") {
-                node = bin(BinOp::Add, node, self.mul());
+                let rhs = self.mul();
+                node = self.new_add(node, rhs, pos);
             } else if self.consume("-") {
-                node = bin(BinOp::Sub, node, self.mul());
+                let rhs = self.mul();
+                node = self.new_sub(node, rhs, pos);
             } else {
                 return node;
             }
+        }
+    }
+
+    fn new_add(&self, lhs: Node, rhs: Node, pos: usize) -> Node {
+        match (type_of(&lhs), type_of(&rhs)) {
+            // 整数 + 整数
+            (Type::Int, Type::Int) => bin(BinOp::Add, lhs, rhs),
+            // ポインタ + 整数
+            (Type::Ptr(base), Type::Int) => {
+                let scaled = bin(BinOp::Mul, rhs, Node::Num(base.size()));
+                bin(BinOp::Add, lhs, scaled)
+            }
+            // 整数 + ポインタ
+            (Type::Int, Type::Ptr(base)) => {
+                let scaled = bin(BinOp::Mul, lhs, Node::Num(base.size()));
+                bin(BinOp::Add, rhs, scaled)
+            }
+            (Type::Ptr(_), Type::Ptr(_)) => error_at(self.src, pos, "can't add two pointers"),
+        }
+    }
+
+    fn new_sub(&self, lhs: Node, rhs: Node, pos: usize) -> Node {
+        match (type_of(&lhs), type_of(&rhs)) {
+            // 整数 - 整数
+            (Type::Int, Type::Int) => bin(BinOp::Sub, lhs, rhs),
+            // ポインタ - 整数
+            (Type::Ptr(base), Type::Int) => {
+                let scaled = bin(BinOp::Mul, rhs, Node::Num(base.size()));
+                bin(BinOp::Sub, lhs, scaled)
+            }
+            // ポインタ - ポインタ
+            (Type::Ptr(base), Type::Ptr(_)) => {
+                let diff = bin(BinOp::Sub, lhs, rhs);
+                bin(BinOp::Div, diff, Node::Num(base.size()))
+            }
+            (Type::Int, Type::Ptr(_)) => error_at(self.src, pos, "can't sub pointer from int"),
         }
     }
 

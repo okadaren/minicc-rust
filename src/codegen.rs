@@ -1,6 +1,10 @@
-use crate::parse::{BinOp, Function, Node, Program};
+use crate::{
+    parse::{BinOp, Function, Node, Program},
+    types::{Type, type_of},
+};
 
 const ARG_REGS: [&str; 6] = ["rdi", "rsi", "rdx", "rcx", "r8", "r9"];
+const ARG_REGS32: [&str; 6] = ["edi", "esi", "edx", "ecx", "r8d", "r9d"];
 
 struct Codegen {
     label: usize, // ラベルの通し番号
@@ -32,24 +36,38 @@ impl Codegen {
         }
     }
 
+    fn load(&self, ty: &Type) {
+        match ty {
+            Type::Int => println!("  movsxd rax, dword ptr [rax]"),
+            Type::Ptr(_) => println!("  mov rax, [rax]"),
+        }
+    }
+
+    fn store(&mut self, ty: &Type) {
+        self.pop("rdi");
+        match ty {
+            Type::Int => println!("  mov [rdi], eax"),
+            Type::Ptr(_) => println!("  mov [rdi], rax"),
+        }
+    }
+
     fn gen_expr(&mut self, node: &Node) {
         match node {
             Node::Num(n) => println!("  mov rax, {}", n),
-            Node::Var { .. } => {
+            Node::Var { ty, .. } => {
                 self.gen_addr(node);
-                println!("  mov rax, [rax]");
+                self.load(ty);
             }
             Node::Addr(e) => self.gen_addr(e),
             Node::Deref(e) => {
                 self.gen_expr(e);
-                println!("  mov rax, [rax]");
+                self.load(&type_of(node));
             }
             Node::Assign(lhs, rhs) => {
                 self.gen_addr(lhs);
                 self.push();
                 self.gen_expr(rhs);
-                self.pop("rdi");
-                println!("  mov [rdi], rax");
+                self.store(&type_of(lhs));
             }
             Node::Call(name, args) => {
                 for arg in args {
@@ -67,6 +85,7 @@ impl Codegen {
                 if self.depth % 2 == 1 {
                     println!("  add rsp, 8");
                 }
+                println!("  movsxd rax, eax");
             }
             Node::Binary(op, lhs, rhs) => {
                 self.gen_expr(rhs);
@@ -159,8 +178,12 @@ impl Codegen {
         println!("  mov rbp, rsp");
         println!("  sub rsp, {}", f.stack_size);
 
-        for (i, offset) in f.params.iter().enumerate() {
-            println!("  mov [rbp-{}], {}", offset, ARG_REGS[i]);
+        for (i, (offset, ty)) in f.params.iter().enumerate() {
+            let reg = match ty {
+                Type::Int => ARG_REGS32[i],
+                Type::Ptr(_) => ARG_REGS[i],
+            };
+            println!("  mov [rbp-{}], {}", offset, reg);
         }
 
         for stmt in &f.body {
