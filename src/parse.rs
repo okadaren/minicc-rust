@@ -31,6 +31,7 @@ pub enum Node {
         body: Box<Node>,
     },
     Block(Vec<Node>),
+    Call(String, Vec<Node>),
 }
 
 struct LVar {
@@ -297,6 +298,19 @@ impl<'a> Parser<'a> {
             return node;
         }
         if let Some(name) = self.consume_ident() {
+            if self.consume("(") {
+                let mut args = Vec::new();
+                while !self.consume(")") {
+                    if !args.is_empty() {
+                        self.expect(",");
+                    }
+                    args.push(self.assign());
+                }
+                if args.len() > 6 {
+                    error_at(self.src, self.peek().pos, "argments limit is 6")
+                }
+                return Node::Call(name, args);
+            }
             return Node::Var(self.var_offset(&name));
         }
         Node::Num(self.expect_number())

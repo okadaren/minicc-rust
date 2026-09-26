@@ -1,5 +1,7 @@
 use crate::parse::{BinOp, Node, Program};
 
+const ARG_REGS: [&str; 6] = ["rdi", "rsi", "rdx", "rcx", "r8", "r9"];
+
 struct Codegen {
     label: usize, // ラベルの通し番号
     depth: usize, // push してまだ pop していない数
@@ -41,6 +43,23 @@ impl Codegen {
                 self.gen_expr(rhs);
                 self.pop("rdi");
                 println!("  mov [rdi], rax");
+            }
+            Node::Call(name, args) => {
+                for arg in args {
+                    self.gen_expr(arg);
+                    self.push();
+                }
+                for i in (0..args.len()).rev() {
+                    self.pop(ARG_REGS[i]);
+                }
+                if self.depth % 2 == 1 {
+                    println!("  sub rsp, 8");
+                }
+                println!("  mov rax, 0");
+                println!("  call {}", name);
+                if self.depth % 2 == 1 {
+                    println!("  add rsp, 8");
+                }
             }
             Node::Binary(op, lhs, rhs) => {
                 self.gen_expr(rhs);

@@ -79,7 +79,7 @@ pub fn tokenize(src: &str) -> Vec<Token> {
             i += 2;
             continue;
         }
-        if b"+-*/()<>=;{}".contains(&c) {
+        if b"+-*/()<>=;{},".contains(&c) {
             toks.push(Token {
                 kind: TokenKind::Punct((c as char).to_string()),
                 pos: i,
