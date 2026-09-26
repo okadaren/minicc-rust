@@ -18,6 +18,19 @@ pub enum Node {
     Var(i64),
     Binary(BinOp, Box<Node>, Box<Node>),
     Assign(Box<Node>, Box<Node>),
+    Return(Box<Node>),
+    If {
+        cond: Box<Node>,
+        then: Box<Node>,
+        els: Option<Box<Node>>,
+    },
+    For {
+        init: Option<Box<Node>>,
+        cond: Option<Box<Node>>,
+        inc: Option<Box<Node>>,
+        body: Box<Node>,
+    },
+    Block(Vec<Node>),
 }
 
 struct LVar {
@@ -57,7 +70,7 @@ impl<'a> Parser<'a> {
 
     // 次が記号なら読み進めてtrueを返す
     fn consume(&mut self, op: &str) -> bool {
-        if matches!(&self.peek().kind, TokenKind::Punct(s) if s == op) {
+        if matches!(&self.peek().kind, TokenKind::Punct(s) | TokenKind::Keyword(s) if s == op) {
             self.pos += 1;
             true
         } else {
@@ -119,9 +132,75 @@ impl<'a> Parser<'a> {
     }
 
     fn stmt(&mut self) -> Node {
+        if self.consume("return") {
+            let node = self.expr();
+            self.expect(";");
+            return Node::Return(Box::new(node));
+        }
+
+        if self.consume("if") {
+            self.expect("(");
+            let cond = Box::new(self.expr());
+            self.expect(")");
+            let then = Box::new(self.stmt());
+            let els = if self.consume("else") {
+                Some(Box::new(self.stmt()))
+            } else {
+                None
+            };
+            return Node::If { cond, then, els };
+        }
+
+        if self.consume("while") {
+            self.expect("(");
+            let cond = Some(Box::new(self.expr()));
+            self.expect(")");
+            let body = Box::new(self.stmt());
+            return Node::For {
+                init: None,
+                cond,
+                inc: None,
+                body,
+            };
+        }
+
+        if self.consume("for") {
+            self.expect("(");
+            let init = self.opt_expr(";").map(Box::new);
+            let cond = self.opt_expr(";").map(Box::new);
+            let inc = self.opt_expr(")").map(Box::new);
+            let body = Box::new(self.stmt());
+            return Node::For {
+                init,
+                cond,
+                inc,
+                body,
+            };
+        }
+
+        if self.consume("{") {
+            let mut stmts = Vec::new();
+            while !self.consume("}") {
+                if self.at_eof() {
+                    error_at(self.src, self.peek().pos, "not '}'");
+                }
+                stmts.push(self.stmt());
+            }
+            return Node::Block(stmts);
+        }
+
         let node = self.expr();
         self.expect(";");
         node
+    }
+
+    fn opt_expr(&mut self, end: &str) -> Option<Node> {
+        if self.consume(end) {
+            return None;
+        }
+        let node = self.expr();
+        self.expect(end);
+        Some(node)
     }
 
     fn expr(&mut self) -> Node {

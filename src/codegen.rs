@@ -33,6 +33,7 @@ fn gen_expr(node: &Node) {
             return;
         }
         Node::Binary(op, lhs, rhs) => (op, lhs, rhs),
+        Node::Return(_) | Node::If { .. } | Node::For { .. } | Node::Block(_) => unreachable!(),
     };
 
     gen_expr(lhs);
@@ -65,6 +66,69 @@ fn gen_expr(node: &Node) {
     println!("  push rax\n")
 }
 
+fn gen_discard(node: &Node) {
+    gen_expr(node);
+    println!("  pop rax");
+}
+
+fn gen_stmt(node: &Node, label: &mut usize) {
+    match node {
+        Node::Return(e) => {
+            gen_expr(e);
+            println!("  pop rax");
+            println!("  mov rsp, rbp");
+            println!("  pop rbp");
+            println!("  ret")
+        }
+        Node::If { cond, then, els } => {
+            *label += 1;
+            let c = *label;
+            gen_expr(cond);
+            println!("  pop rax");
+            println!("  cmp rax, 0");
+            println!("  je .Lelse{}", c);
+            gen_stmt(then, label);
+            println!("  jmp .Lend{}", c);
+            println!(".Lelse{}:", c);
+            if let Some(e) = els {
+                gen_stmt(e, label);
+            }
+            println!(".Lend{}:", c);
+        }
+        Node::For {
+            init,
+            cond,
+            inc,
+            body,
+        } => {
+            *label += 1;
+            let c = *label;
+            if let Some(i) = init {
+                gen_discard(i);
+            }
+            println!(".Lbegin{}:", c);
+            if let Some(cd) = cond {
+                gen_expr(cd);
+                println!("  pop rax");
+                println!("  cmp rax, 0");
+                println!("  je .Lend{}", c);
+            }
+            gen_stmt(body, label);
+            if let Some(i) = inc {
+                gen_discard(i);
+            }
+            println!("  jmp .Lbegin{}", c);
+            println!(".Lend{}:", c);
+        }
+        Node::Block(stmts) => {
+            for s in stmts {
+                gen_stmt(s, label);
+            }
+        }
+        _ => gen_discard(node),
+    }
+}
+
 pub fn gen_program(prog: &Program) {
     println!(".intel_syntax noprefix");
     println!(".globl main");
@@ -74,9 +138,9 @@ pub fn gen_program(prog: &Program) {
     println!("  mov rbp, rsp");
     println!("  sub rsp, {}", prog.stack_size);
 
+    let mut label = 0;
     for stmt in &prog.body {
-        gen_expr(stmt);
-        println!("  pop rax");
+        gen_stmt(stmt, &mut label);
     }
 
     println!("  mov rsp, rbp");

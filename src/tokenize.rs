@@ -2,6 +2,7 @@ use std::process;
 #[derive(Debug, Clone, PartialEq)]
 pub enum TokenKind {
     Punct(String),
+    Keyword(String),
     Ident(String),
     Num(i64),
     Eof,
@@ -12,6 +13,8 @@ pub struct Token {
     pub kind: TokenKind,
     pub pos: usize,
 }
+
+const KEYWORDS: [&str; 5] = ["return", "if", "else", "while", "for"];
 
 pub fn error_at(src: &str, pos: usize, msg: &str) -> ! {
     eprintln!("{}", src);
@@ -54,11 +57,13 @@ pub fn tokenize(src: &str) -> Vec<Token> {
             while i < s.len() && is_ident2(s[i]) {
                 i += 1;
             }
-            let name = src[start..i].to_string();
-            toks.push(Token {
-                kind: TokenKind::Ident(name),
-                pos: start,
-            });
+            let word = src[start..i].to_string();
+            let kind = if KEYWORDS.contains(&word.as_str()) {
+                TokenKind::Keyword(word)
+            } else {
+                TokenKind::Ident(word)
+            };
+            toks.push(Token { kind, pos: start });
             continue;
         }
         // 2文字の記号
@@ -74,7 +79,7 @@ pub fn tokenize(src: &str) -> Vec<Token> {
             i += 2;
             continue;
         }
-        if b"+-*/()<>=;".contains(&c) {
+        if b"+-*/()<>=;{}".contains(&c) {
             toks.push(Token {
                 kind: TokenKind::Punct((c as char).to_string()),
                 pos: i,
