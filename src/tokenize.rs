@@ -94,6 +94,17 @@ pub fn tokenize(src: &str) -> Vec<Token> {
             i += 1;
             continue;
         }
+        if src[i..].starts_with("//") {
+            i = src[i..].find('\n').map_or(s.len(), |n| i + n);
+            continue;
+        }
+        if src[i..].starts_with("/*") {
+            match src[i + 2..].find("*/") {
+                Some(n) => i = i + 2 + n + 2,
+                None => error_at(src, i, "comment is not closed"),
+            }
+            continue;
+        }
         if c.is_ascii_digit() {
             let start = i;
             while i < s.len() && s[i].is_ascii_digit() {
