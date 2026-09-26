@@ -1,11 +1,8 @@
 use std::process;
-
-use crate::tokenize::TokenKind::Ident;
-
 #[derive(Debug, Clone, PartialEq)]
 pub enum TokenKind {
     Punct(String),
-    Ident(char),
+    Ident(String),
     Num(i64),
     Eof,
 }
@@ -20,6 +17,14 @@ pub fn error_at(src: &str, pos: usize, msg: &str) -> ! {
     eprintln!("{}", src);
     eprintln!("{}^ {}", " ".repeat(pos), msg);
     process::exit(1);
+}
+
+fn is_ident1(c: u8) -> bool {
+    c.is_ascii_alphabetic() || c == b'_'
+}
+
+fn is_ident2(c: u8) -> bool {
+    is_ident1(c) || c.is_ascii_digit()
 }
 
 pub fn tokenize(src: &str) -> Vec<Token> {
@@ -44,12 +49,16 @@ pub fn tokenize(src: &str) -> Vec<Token> {
             });
             continue;
         }
-        if c.is_ascii_lowercase() {
+        if is_ident1(c) {
+            let start = i;
+            while i < s.len() && is_ident2(s[i]) {
+                i += 1;
+            }
+            let name = src[start..i].to_string();
             toks.push(Token {
-                kind: Ident(c as char),
-                pos: i,
+                kind: TokenKind::Ident(name),
+                pos: start,
             });
-            i += 1;
             continue;
         }
         // 2文字の記号

@@ -20,6 +20,16 @@ pub enum Node {
     Assign(Box<Node>, Box<Node>),
 }
 
+struct LVar {
+    name: String,
+    offset: i64,
+}
+
+pub struct Program {
+    pub body: Vec<Node>,
+    pub stack_size: i64,
+}
+
 fn bin(op: BinOp, l: Node, r: Node) -> Node {
     Node::Binary(op, Box::new(l), Box::new(r))
 }
@@ -28,6 +38,7 @@ pub struct Parser<'a> {
     src: &'a str,
     toks: Vec<Token>,
     pos: usize,
+    locals: Vec<LVar>,
 }
 
 impl<'a> Parser<'a> {
@@ -36,6 +47,7 @@ impl<'a> Parser<'a> {
             src,
             toks: tokenize(src),
             pos: 0,
+            locals: Vec::new(),
         }
     }
 
@@ -71,26 +83,39 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn consume_ident(&mut self) -> Option<char> {
-        match self.peek().kind {
-            TokenKind::Ident(c) => {
-                self.pos += 1;
-                Some(c)
-            }
-            _ => None,
+    fn consume_ident(&mut self) -> Option<String> {
+        if let TokenKind::Ident(name) = &self.peek().kind {
+            let name = name.clone();
+            self.pos += 1;
+            Some(name)
+        } else {
+            None
         }
+    }
+
+    fn var_offset(&mut self, name: &str) -> i64 {
+        if let Some(var) = self.locals.iter().find(|v| v.name == name) {
+            return var.offset;
+        }
+        let offset = (self.locals.len() as i64 + 1) * 8;
+        self.locals.push(LVar {
+            name: name.to_string(),
+            offset,
+        });
+        offset
     }
 
     fn at_eof(&self) -> bool {
         self.peek().kind == TokenKind::Eof
     }
 
-    pub fn program(&mut self) -> Vec<Node> {
-        let mut stmts = Vec::new();
+    pub fn program(&mut self) -> Program {
+        let mut body = Vec::new();
         while !self.at_eof() {
-            stmts.push(self.stmt());
+            body.push(self.stmt());
         }
-        stmts
+        let stack_size = (self.locals.len() as i64 * 8 + 15) / 16 * 16;
+        Program { body, stack_size }
     }
 
     fn stmt(&mut self) -> Node {
@@ -192,9 +217,8 @@ impl<'a> Parser<'a> {
             self.expect(")");
             return node;
         }
-        if let Some(c) = self.consume_ident() {
-            let offset = (c as i64 - 'a' as i64 + 1) * 8;
-            return Node::Var(offset);
+        if let Some(name) = self.consume_ident() {
+            return Node::Var(self.var_offset(&name));
         }
         Node::Num(self.expect_number())
     }

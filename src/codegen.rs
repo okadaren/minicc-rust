@@ -1,4 +1,4 @@
-use crate::parse::{BinOp, Node};
+use crate::parse::{BinOp, Node, Program};
 
 fn gen_lval(node: &Node) {
     match node {
@@ -65,16 +65,16 @@ fn gen_expr(node: &Node) {
     println!("  push rax\n")
 }
 
-pub fn gen_program(stmts: &[Node]) {
+pub fn gen_program(prog: &Program) {
     println!(".intel_syntax noprefix");
     println!(".globl main");
     println!("main:");
 
     println!("  push rbp");
     println!("  mov rbp, rsp");
-    println!("  sub rsp, 208");
+    println!("  sub rsp, {}", prog.stack_size);
 
-    for stmt in stmts {
+    for stmt in &prog.body {
         gen_expr(stmt);
         println!("  pop rax");
     }

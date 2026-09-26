@@ -50,4 +50,11 @@ assert 8 "a=3; z=5; a+z;"
 assert 6 "a=b=3; a+b;"
 assert 14 "a=3; b=5*6-8; a+b/2;"
 
+# ステップ10：複数文字のローカル変数
+assert 3 "foo=3; foo;"
+assert 6 "foo=1; bar=2+3; foo+bar;"
+assert 8 "foo123=3; bar=5; foo123+bar;"
+assert 7 "_x=3; Hello_World=4; _x+Hello_World;"
+assert 30 "a=1;b=2;c=3;d=4;e=5;f=6;g=7;h=8;i=9;j=10;k=11;l=12;m=13;n=14;o=15;p=16;q=17;r=18;s=19;t=20;u=21;v=22;w=23;x=24;y=25;z=26;aa=27;ab=28;ac=29;ad=30; ad;"
+
 echo OK
