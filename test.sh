@@ -19,6 +19,7 @@ assert() {
 
 assert 0 0
 assert 42 42
+assert 32 "15+22-5"
 echo OK
 
 cargo clean
