@@ -215,9 +215,18 @@ pub fn gen_program(prog: &Program) {
 
     println!(".data");
     for g in &prog.globals {
-        println!(".globl {}", g.name);
-        println!("{}:", g.name);
-        println!("  .zero {}", g.ty.size());
+        match &g.init {
+            Some(bytes) => {
+                println!("{}:", g.name);
+                let list: Vec<String> = bytes.iter().map(|b| b.to_string()).collect();
+                println!("  .byte {}", list.join(", "));
+            }
+            None => {
+                println!(".globl {}", g.name);
+                println!("{}:", g.name);
+                println!("  .zero {}", g.ty.size());
+            }
+        }
     }
 
     println!(".text");

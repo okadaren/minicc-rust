@@ -60,6 +60,7 @@ pub struct Function {
 pub struct GlobalVar {
     pub name: String,
     pub ty: Type,
+    pub init: Option<Vec<u8>>,
 }
 
 pub struct Program {
@@ -78,6 +79,7 @@ pub struct Parser<'a> {
     locals: Vec<LVar>,
     stack: i64,
     globals: Vec<GlobalVar>,
+    str_count: usize,
 }
 
 impl<'a> Parser<'a> {
@@ -89,6 +91,7 @@ impl<'a> Parser<'a> {
             locals: Vec::new(),
             stack: 0,
             globals: Vec::new(),
+            str_count: 0,
         }
     }
 
@@ -206,7 +209,11 @@ impl<'a> Parser<'a> {
         if self.globals.iter().any(|g| g.name == name) {
             error_at(self.src, pos, "same name global variable defined");
         }
-        self.globals.push(GlobalVar { name, ty });
+        self.globals.push(GlobalVar {
+            name,
+            ty,
+            init: None,
+        });
     }
 
     fn array_suffix(&mut self, ty: Type) -> Type {
@@ -518,6 +525,21 @@ impl<'a> Parser<'a> {
             let node = self.expr();
             self.expect(")");
             return node;
+        }
+
+        if let TokenKind::Str(bytes) = &self.peek().kind {
+            let mut bytes = bytes.clone();
+            self.pos += 1;
+            bytes.push(0);
+            let name = format!(".L.str.{}", self.str_count);
+            self.str_count += 1;
+            let ty = Type::Array(Box::new(Type::Char), bytes.len());
+            self.globals.push(GlobalVar {
+                name: name.clone(),
+                ty: ty.clone(),
+                init: Some(bytes),
+            });
+            return Node::GVar { name, ty };
         }
 
         let pos = self.peek().pos;

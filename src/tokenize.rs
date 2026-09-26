@@ -1,10 +1,13 @@
 use std::process;
+use std::sync::OnceLock;
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum TokenKind {
     Punct(String),
     Keyword(String),
     Ident(String),
     Num(i64),
+    Str(Vec<u8>),
     Eof,
 }
 
@@ -18,9 +21,24 @@ const KEYWORDS: [&str; 8] = [
     "return", "if", "else", "while", "for", "int", "sizeof", "char",
 ];
 
+pub static FILENAME: OnceLock<String> = OnceLock::new();
+
 pub fn error_at(src: &str, pos: usize, msg: &str) -> ! {
-    eprintln!("{}", src);
-    eprintln!("{}^ {}", " ".repeat(pos), msg);
+    let line_start = src[..pos].rfind('\n').map_or(0, |i| i + 1);
+    let line_end = src[pos..].find('\n').map_or(src.len(), |i| pos + i);
+    let line_no = src[..pos].matches('\n').count() + 1;
+
+    let name = FILENAME.get().map(String::as_str).unwrap_or("-");
+    let prefix = format!("{}:{}: ", name, line_no);
+    eprintln!("{}{}", prefix, &src[line_start..line_end]);
+
+    let width = |s: &str| {
+        s.chars()
+            .map(|c| if c.is_ascii() { 1 } else { 2 })
+            .sum::<usize>()
+    };
+    let indent = width(&prefix) + width(&src[line_start..pos]);
+    eprintln!("{}^ {}", " ".repeat(indent), msg);
     process::exit(1);
 }
 
@@ -38,6 +56,40 @@ pub fn tokenize(src: &str) -> Vec<Token> {
     let mut i = 0;
     while i < s.len() {
         let c = s[i];
+
+        if c == b'"' {
+            let start = i;
+            i += 1;
+            let mut bytes = Vec::new();
+            loop {
+                if i >= s.len() {
+                    error_at(src, start, "string literal is not closed");
+                }
+                match s[i] {
+                    b'"' => break,
+                    b'\\' => {
+                        i += 1;
+                        if i >= s.len() {
+                            error_at(src, start, "string literal is not closed");
+                        }
+                        bytes.push(match s[i] {
+                            b'n' => b'\n',
+                            b't' => b'\t',
+                            b'0' => 0,
+                            other => other,
+                        });
+                    }
+                    b => bytes.push(b),
+                }
+                i += 1;
+            }
+            i += 1;
+            toks.push(Token {
+                kind: TokenKind::Str(bytes),
+                pos: start,
+            });
+            continue;
+        }
         if c.is_ascii_whitespace() {
             i += 1;
             continue;

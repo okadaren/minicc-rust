@@ -21,7 +21,7 @@ EOF
 assert() {
   expected="$1"
   input="$2"
-  $RCC "$input" > tmp.s || exit 1
+  printf '%s\n' "$input" | $RCC - > tmp.s || exit 1
   gcc -static -o tmp tmp.s tmp2.o
   ./tmp
   actual="$?"
@@ -230,5 +230,43 @@ assert 9 "int main() { char *p; char c[4]; p = c; p[2] = 9; return c[2]; }"
 assert 1 "int f(char a, char b, char c) { return a - b - c; } int main() { return f(7, 3, 3); }"
 assert 6 "char g[4]; int main() { g[0] = 1; g[3] = 5; return g[0] + g[3]; }"
 assert 3 "char *p; int main() { char c[2]; c[1] = 3; p = c; return *(p + 1); }"
+
+# ステップ25：文字列リテラル
+assert 97 'int main() { return "abc"[0]; }'
+assert 98 'int main() { return "abc"[1]; }'
+assert 99 'int main() { return "abc"[2]; }'
+assert 0 'int main() { return "abc"[3]; }'
+assert 4 'int main() { return sizeof("abc"); }'
+assert 111 'int main() { char *s; s = "hello"; return s[4]; }'
+assert 1 'int main() { char *a; char *b; a = "x"; b = "y"; return b[0] - a[0]; }'
+assert 10 'int main() { return "\n"[0]; }'
+assert 34 'int main() { return "\""[0]; }'
+assert 92 'int main() { return "\\"[0]; }'
+assert 12 'int len(char *s) { int n; n = 0; while (s[n]) n = n + 1; return n; } int main() { return len("hello, world"); }'
+assert 6 'int main() { return printf("hello\n"); }'
+
+# ステップ26：ファイルから読む
+cat > tmp-fib.c <<'EOC'
+int fib(int n) {
+  if (n <= 1)
+    return n;
+  return fib(n - 1) + fib(n - 2);
+}
+
+int main() {
+  printf("fib(10) = %d\n", fib(10));
+  return fib(10);
+}
+EOC
+$RCC tmp-fib.c > tmp.s || exit 1
+gcc -static -o tmp tmp.s tmp2.o
+./tmp
+actual="$?"
+if [ "$actual" = 55 ]; then
+  echo "tmp-fib.c => $actual"
+else
+  echo "tmp-fib.c => 55 expected, but got $actual"
+  exit 1
+fi
 
 echo OK
