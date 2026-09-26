@@ -39,9 +39,15 @@ struct LVar {
     offset: i64,
 }
 
-pub struct Program {
+pub struct Function {
+    pub name: String,
+    pub params: Vec<i64>,
     pub body: Vec<Node>,
     pub stack_size: i64,
+}
+
+pub struct Program {
+    pub funcs: Vec<Function>,
 }
 
 fn bin(op: BinOp, l: Node, r: Node) -> Node {
@@ -124,12 +130,53 @@ impl<'a> Parser<'a> {
     }
 
     pub fn program(&mut self) -> Program {
-        let mut body = Vec::new();
+        let mut funcs = Vec::new();
         while !self.at_eof() {
+            funcs.push(self.function());
+        }
+        Program { funcs }
+    }
+
+    fn function(&mut self) -> Function {
+        self.locals.clear();
+
+        let pos = self.peek().pos;
+        let name = self
+            .consume_ident()
+            .unwrap_or_else(|| error_at(self.src, pos, "not function name"));
+
+        self.expect("(");
+        let mut params = Vec::new();
+        while !self.consume(")") {
+            if !params.is_empty() {
+                self.expect(",");
+            }
+            let pos = self.peek().pos;
+            let param = self
+                .consume_ident()
+                .unwrap_or_else(|| error_at(self.src, pos, "not argment name"));
+            params.push(self.var_offset(&param));
+        }
+        if params.len() > 6 {
+            error_at(self.src, pos, "argments limit is 6");
+        }
+
+        self.expect("{");
+        let mut body = Vec::new();
+        while !self.consume("}") {
+            if self.at_eof() {
+                error_at(self.src, self.peek().pos, "not '}'");
+            }
             body.push(self.stmt());
         }
+
         let stack_size = (self.locals.len() as i64 * 8 + 15) / 16 * 16;
-        Program { body, stack_size }
+        Function {
+            name,
+            params,
+            body,
+            stack_size,
+        }
     }
 
     fn stmt(&mut self) -> Node {

@@ -1,10 +1,11 @@
-use crate::parse::{BinOp, Node, Program};
+use crate::parse::{BinOp, Function, Node, Program};
 
 const ARG_REGS: [&str; 6] = ["rdi", "rsi", "rdx", "rcx", "r8", "r9"];
 
 struct Codegen {
     label: usize, // ラベルの通し番号
     depth: usize, // push してまだ pop していない数
+    func: String,
 }
 
 impl Codegen {
@@ -95,7 +96,7 @@ impl Codegen {
         match node {
             Node::Return(e) => {
                 self.gen_expr(e);
-                println!("  jmp .L.return");
+                println!("  jmp .L.return.{}", self.func);
             }
             Node::If { cond, then, els } => {
                 let c = self.new_label();
@@ -141,26 +142,42 @@ impl Codegen {
             _ => self.gen_expr(node),
         }
     }
+
+    fn gen_function(&mut self, f: &Function) {
+        self.func = f.name.clone();
+
+        println!(".globl {}", f.name);
+        println!("{}:", f.name);
+
+        println!("  push rbp");
+        println!("  mov rbp, rsp");
+        println!("  sub rsp, {}", f.stack_size);
+
+        for (i, offset) in f.params.iter().enumerate() {
+            println!("  mov [rbp-{}], {}", offset, ARG_REGS[i]);
+        }
+
+        for stmt in &f.body {
+            self.gen_stmt(stmt);
+        }
+        assert_eq!(self.depth, 0);
+
+        println!(".L.return.{}:", f.name);
+        println!("  mov rsp, rbp");
+        println!("  pop rbp");
+        println!("  ret");
+    }
 }
 
 pub fn gen_program(prog: &Program) {
-    let mut cg = Codegen { label: 0, depth: 0 };
+    let mut cg = Codegen {
+        label: 0,
+        depth: 0,
+        func: String::new(),
+    };
 
     println!(".intel_syntax noprefix");
-    println!(".globl main");
-    println!("main:");
-
-    println!("  push rbp");
-    println!("  mov rbp, rsp");
-    println!("  sub rsp, {}", prog.stack_size);
-
-    for stmt in &prog.body {
-        cg.gen_stmt(stmt);
+    for f in &prog.funcs {
+        cg.gen_function(f);
     }
-    assert_eq!(cg.depth, 0);
-
-    println!(".L.return:");
-    println!("  mov rsp, rbp");
-    println!("  pop rbp");
-    println!("  ret");
 }
