@@ -168,4 +168,67 @@ assert 15 "int main() { int *p; alloc4(&p, 1, 2, 4, 8); *(p + 1) = 10; return *p
 assert 2 "int main() { int x; x = -3; return x + 5; }"
 assert 1 "int main() { return sub(3, 5) < 0; }"
 
+# ステップ20：sizeof
+assert 4 "int main() { int x; return sizeof(x); }"
+assert 8 "int main() { int *y; return sizeof(y); }"
+assert 4 "int main() { int x; return sizeof(x + 3); }"
+assert 4 "int main() { int *y; return sizeof(*y); }"
+assert 8 "int main() { int *y; return sizeof(y + 3); }"
+assert 8 "int main() { int x; return sizeof(&x); }"
+assert 8 "int main() { int **z; return sizeof(*z); }"
+assert 4 "int main() { return sizeof(1); }"
+assert 4 "int main() { return sizeof(sizeof(1)); }"
+assert 4 "int main() { int x; return sizeof x; }"
+assert 1 "int main() { int x; x = 1; sizeof(x = 3); return x; }"
+
+# ステップ21：配列
+assert 3 "int main() { int a[2]; *a = 1; *(a + 1) = 2; int *p; p = a; return *p + *(p + 1); }"
+assert 40 "int main() { int a[10]; return sizeof(a); }"
+assert 24 "int main() { int *b[3]; return sizeof(b); }"
+assert 4 "int main() { int a[4]; return sizeof(*a); }"
+assert 2 "int main() { int a[3]; *a = 1; *(a + 1) = 2; *(a + 2) = 3; return *(a + 2) - *a; }"
+assert 16 "int main() { int a[5]; int i; for (i = 0; i < 5; i = i + 1) *(a + i) = i * i; return *(a + 4); }"
+assert 3 "int main() { int a[4]; return (a + 3) - a; }"
+assert 7 "int main() { int a[3]; int x; x = 7; *(a + 2) = 100; return x; }"
+assert 7 "int main() { int x; int a[3]; x = 7; *(a + 2) = 100; return x; }"
+assert 10 "int sum(int *p, int n) { int s; int i; s = 0; for (i = 0; i < n; i = i + 1) s = s + *(p + i); return s; } int main() { int a[4]; *a = 1; *(a + 1) = 2; *(a + 2) = 3; *(a + 3) = 4; return sum(a, 4); }"
+
+# ステップ22：配列の添字
+assert 6 "int main() { int a[3]; a[0] = 1; a[1] = 2; a[2] = 3; return a[0] + a[1] + a[2]; }"
+assert 16 "int main() { int a[5]; int i; for (i = 0; i < 5; i = i + 1) a[i] = i * i; return a[4]; }"
+assert 7 "int main() { int a[2]; a[1] = 7; return 1[a]; }"
+assert 4 "int main() { int *p; alloc4(&p, 1, 2, 4, 8); return p[2]; }"
+assert 8 "int main() { int *b[2]; int x; int y; x = 3; y = 5; b[0] = &x; b[1] = &y; return *b[0] + *b[1]; }"
+assert 4 "int main() { int a[3]; return sizeof(a[0]); }"
+assert 1 "int main() { int a[4]; a[3] = 9; return *(a + 3) == a[3]; }"
+assert 5 "int main() { int a[4]; a[0] = 1; a[1] = 3; a[a[0]] = 5; return a[1]; }"
+assert 7 "int main() { int a[3]; int x; x = 7; a[2] = 100; return x; }"
+assert 10 "int sum(int *p, int n) { int s; int i; s = 0; for (i = 0; i < n; i = i + 1) s = s + p[i]; return s; } int main() { int a[4]; a[0] = 1; a[1] = 2; a[2] = 3; a[3] = 4; return sum(a, 4); }"
+
+# ステップ23：グローバル変数
+assert 0 "int x; int main() { return x; }"
+assert 3 "int x; int main() { x = 3; return x; }"
+assert 7 "int x; int y; int main() { x = 3; y = 4; return x + y; }"
+assert 3 "int x[4]; int main() { x[0] = 0; x[1] = 1; x[2] = 2; x[3] = 3; return x[3]; }"
+assert 16 "int x[4]; int main() { return sizeof(x); }"
+assert 5 "int *p; int x; int main() { x = 5; p = &x; return *p; }"
+assert 9 "int g; int set(int v) { g = v; return 0; } int main() { set(9); return g; }"
+assert 2 "int x; int main() { int x; x = 2; return x; }"
+assert 3 "int count; int inc() { count = count + 1; return count; } int main() { inc(); inc(); return inc(); }"
+assert 6 "int a[3]; int main() { int i; for (i = 0; i < 3; i = i + 1) a[i] = i + 1; return a[0] + a[1] + a[2]; }"
+
+# ステップ24：char 型
+assert 3 "int main() { char x[3]; x[0] = -1; x[1] = 2; int y; y = 4; return x[0] + y; }"
+assert 5 "int main() { char x[3]; x[0] = -1; x[1] = 2; int y; y = 4; return y - x[0]; }"
+assert 1 "int main() { char x; return sizeof(x); }"
+assert 10 "int main() { char x[10]; return sizeof(x); }"
+assert 8 "int main() { char *p; return sizeof(p); }"
+assert 44 "int main() { char x; x = 300; return x; }"
+assert 1 "int main() { char x; x = 200; return x < 0; }"
+assert 102 "int main() { char c[2]; int x; x = 100; c[0] = 1; c[1] = 2; return x + c[1]; }"
+assert 9 "int main() { char *p; char c[4]; p = c; p[2] = 9; return c[2]; }"
+assert 1 "int f(char a, char b, char c) { return a - b - c; } int main() { return f(7, 3, 3); }"
+assert 6 "char g[4]; int main() { g[0] = 1; g[3] = 5; return g[0] + g[3]; }"
+assert 3 "char *p; int main() { char c[2]; c[1] = 3; p = c; return *(p + 1); }"
+
 echo OK

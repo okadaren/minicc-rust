@@ -20,6 +20,10 @@ pub enum Node {
         offset: i64,
         ty: Type,
     },
+    GVar {
+        name: String,
+        ty: Type,
+    },
     Binary(BinOp, Box<Node>, Box<Node>),
     Assign(Box<Node>, Box<Node>),
     Return(Box<Node>),
@@ -53,8 +57,14 @@ pub struct Function {
     pub stack_size: i64,
 }
 
+pub struct GlobalVar {
+    pub name: String,
+    pub ty: Type,
+}
+
 pub struct Program {
     pub funcs: Vec<Function>,
+    pub globals: Vec<GlobalVar>,
 }
 
 fn bin(op: BinOp, l: Node, r: Node) -> Node {
@@ -66,6 +76,8 @@ pub struct Parser<'a> {
     toks: Vec<Token>,
     pos: usize,
     locals: Vec<LVar>,
+    stack: i64,
+    globals: Vec<GlobalVar>,
 }
 
 impl<'a> Parser<'a> {
@@ -75,6 +87,8 @@ impl<'a> Parser<'a> {
             toks: tokenize(src),
             pos: 0,
             locals: Vec::new(),
+            stack: 0,
+            globals: Vec::new(),
         }
     }
 
@@ -126,9 +140,17 @@ impl<'a> Parser<'a> {
             .unwrap_or_else(|| error_at(self.src, pos, &format!("not {}", what)))
     }
 
+    fn is_typename(&self) -> bool {
+        matches!(&self.peek().kind, TokenKind::Keyword(k) if k == "int" || k == "char")
+    }
+
     fn parse_type(&mut self) -> Type {
-        self.expect("int");
-        let mut ty = Type::Int;
+        let mut ty = if self.consume("char") {
+            Type::Char
+        } else {
+            self.expect("int");
+            Type::Int
+        };
         while self.consume("*") {
             ty = Type::pointer_to(ty);
         }
@@ -139,7 +161,8 @@ impl<'a> Parser<'a> {
         if self.locals.iter().any(|v| v.name == name) {
             error_at(self.src, pos, "same name variable is defined");
         }
-        let offset = (self.locals.len() as i64 + 1) * 8;
+        self.stack = (self.stack + ty.size() + 7) / 8 * 8;
+        let offset = self.stack;
         self.locals.push(LVar { name, offset, ty });
         offset
     }
@@ -155,16 +178,52 @@ impl<'a> Parser<'a> {
     pub fn program(&mut self) -> Program {
         let mut funcs = Vec::new();
         while !self.at_eof() {
-            funcs.push(self.function());
+            if self.is_function() {
+                funcs.push(self.function());
+            } else {
+                self.global_var();
+            }
         }
-        Program { funcs }
+        let globals = std::mem::take(&mut self.globals);
+        Program { funcs, globals }
+    }
+
+    fn is_function(&mut self) -> bool {
+        let start = self.pos;
+        self.parse_type();
+        self.expect_ident("name");
+        let result = matches!(&self.peek().kind, TokenKind::Punct(s) if s == "(");
+        self.pos = start;
+        result
+    }
+
+    fn global_var(&mut self) {
+        let ty = self.parse_type();
+        let pos = self.peek().pos;
+        let name = self.expect_ident("variable name");
+        let ty = self.array_suffix(ty);
+        self.expect(";");
+        if self.globals.iter().any(|g| g.name == name) {
+            error_at(self.src, pos, "same name global variable defined");
+        }
+        self.globals.push(GlobalVar { name, ty });
+    }
+
+    fn array_suffix(&mut self, ty: Type) -> Type {
+        if self.consume("[") {
+            let len = self.expect_number();
+            self.expect("]");
+            return Type::Array(Box::new(ty), len as usize);
+        }
+        ty
     }
 
     fn function(&mut self) -> Function {
         self.locals.clear();
+        self.stack = 0;
 
         let pos = self.peek().pos;
-        self.expect("int");
+        self.parse_type();
         let name = self.expect_ident("function name");
 
         self.expect("(");
@@ -192,7 +251,7 @@ impl<'a> Parser<'a> {
             body.push(self.stmt());
         }
 
-        let stack_size = (self.locals.len() as i64 * 8 + 15) / 16 * 16;
+        let stack_size = (self.stack + 15) / 16 * 16;
         Function {
             name,
             params,
@@ -202,10 +261,11 @@ impl<'a> Parser<'a> {
     }
 
     fn stmt(&mut self) -> Node {
-        if matches!(&self.peek().kind, TokenKind::Keyword(k) if k == "int") {
+        if self.is_typename() {
             let ty = self.parse_type();
             let pos = self.peek().pos;
             let name = self.expect_ident("variable name");
+            let ty = self.array_suffix(ty);
             self.declare_var(name, ty, pos);
             self.expect(";");
             return Node::Block(Vec::new());
@@ -291,8 +351,12 @@ impl<'a> Parser<'a> {
         let node = self.equality();
 
         if self.consume("=") {
-            if !matches!(node, Node::Var { .. } | Node::Deref(_)) {
+            if !matches!(node, Node::Var { .. } | Node::GVar { .. } | Node::Deref(_)) {
                 error_at(self.src, pos, "the lhs must be a variable or a * expr");
+            }
+
+            if matches!(type_of(&node), Type::Array(..)) {
+                error_at(self.src, pos, "can't assign to array");
             }
             return Node::Assign(Box::new(node), Box::new(self.assign()));
         }
@@ -349,38 +413,42 @@ impl<'a> Parser<'a> {
     }
 
     fn new_add(&self, lhs: Node, rhs: Node, pos: usize) -> Node {
-        match (type_of(&lhs), type_of(&rhs)) {
+        let lbase = type_of(&lhs).base().cloned();
+        let rbase = type_of(&rhs).base().cloned();
+        match (lbase, rbase) {
             // 整数 + 整数
-            (Type::Int, Type::Int) => bin(BinOp::Add, lhs, rhs),
+            (None, None) => bin(BinOp::Add, lhs, rhs),
             // ポインタ + 整数
-            (Type::Ptr(base), Type::Int) => {
+            (Some(base), None) => {
                 let scaled = bin(BinOp::Mul, rhs, Node::Num(base.size()));
                 bin(BinOp::Add, lhs, scaled)
             }
             // 整数 + ポインタ
-            (Type::Int, Type::Ptr(base)) => {
+            (None, Some(base)) => {
                 let scaled = bin(BinOp::Mul, lhs, Node::Num(base.size()));
                 bin(BinOp::Add, rhs, scaled)
             }
-            (Type::Ptr(_), Type::Ptr(_)) => error_at(self.src, pos, "can't add two pointers"),
+            (Some(_), Some(_)) => error_at(self.src, pos, "can't add two pointers"),
         }
     }
 
     fn new_sub(&self, lhs: Node, rhs: Node, pos: usize) -> Node {
-        match (type_of(&lhs), type_of(&rhs)) {
+        let lbase = type_of(&lhs).base().cloned();
+        let rbase = type_of(&rhs).base().cloned();
+        match (lbase, rbase) {
             // 整数 - 整数
-            (Type::Int, Type::Int) => bin(BinOp::Sub, lhs, rhs),
+            (None, None) => bin(BinOp::Sub, lhs, rhs),
             // ポインタ - 整数
-            (Type::Ptr(base), Type::Int) => {
+            (Some(base), None) => {
                 let scaled = bin(BinOp::Mul, rhs, Node::Num(base.size()));
                 bin(BinOp::Sub, lhs, scaled)
             }
             // ポインタ - ポインタ
-            (Type::Ptr(base), Type::Ptr(_)) => {
+            (Some(base), Some(_)) => {
                 let diff = bin(BinOp::Sub, lhs, rhs);
                 bin(BinOp::Div, diff, Node::Num(base.size()))
             }
-            (Type::Int, Type::Ptr(_)) => error_at(self.src, pos, "can't sub pointer from int"),
+            (None, Some(_)) => error_at(self.src, pos, "can't sub pointer from int"),
         }
     }
 
@@ -399,6 +467,10 @@ impl<'a> Parser<'a> {
     }
 
     fn unary(&mut self) -> Node {
+        if self.consume("sizeof") {
+            let node = self.unary();
+            return Node::Num(type_of(&node).size());
+        }
         if self.consume("+") {
             return self.unary();
         }
@@ -408,7 +480,7 @@ impl<'a> Parser<'a> {
         if self.consume("*") {
             let pos = self.peek().pos;
             let node = self.unary();
-            if !matches!(type_of(&node), Type::Ptr(_)) {
+            if type_of(&node).base().is_none() {
                 error_at(self.src, pos, "can't deref because this is not pointer")
             }
             return Node::Deref(Box::new(node));
@@ -416,12 +488,29 @@ impl<'a> Parser<'a> {
         if self.consume("&") {
             let pos = self.peek().pos;
             let node = self.unary();
-            if !matches!(node, Node::Var { .. } | Node::Deref(_)) {
+            if !matches!(node, Node::Var { .. } | Node::GVar { .. } | Node::Deref(_)) {
                 error_at(self.src, pos, "can't take the address of this")
             }
             return Node::Addr(Box::new(node));
         }
-        self.primary()
+        self.postfix()
+    }
+
+    fn postfix(&mut self) -> Node {
+        let mut node = self.primary();
+        loop {
+            let pos = self.peek().pos;
+            if !self.consume("[") {
+                return node;
+            }
+            let index = self.expr();
+            self.expect("]");
+            let addr = self.new_add(node, index, pos);
+            if type_of(&addr).base().is_none() {
+                error_at(self.src, pos, "this is not pointer or array, can't deref");
+            }
+            node = Node::Deref(Box::new(addr))
+        }
     }
 
     fn primary(&mut self) -> Node {
@@ -446,13 +535,19 @@ impl<'a> Parser<'a> {
                 }
                 return Node::Call(name, args);
             }
-            return match self.find_var(&name) {
-                Some(var) => Node::Var {
+            if let Some(var) = self.find_var(&name) {
+                return Node::Var {
                     offset: var.offset,
                     ty: var.ty.clone(),
-                },
-                None => error_at(self.src, pos, "not defined variable"),
-            };
+                };
+            }
+            if let Some(g) = self.globals.iter().find(|g| g.name == name) {
+                return Node::GVar {
+                    name,
+                    ty: g.ty.clone(),
+                };
+            }
+            error_at(self.src, pos, "not defined variable");
         }
         Node::Num(self.expect_number())
     }
