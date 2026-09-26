@@ -1,135 +1,132 @@
 use crate::parse::{BinOp, Node, Program};
 
-fn gen_lval(node: &Node) {
-    match node {
-        Node::Var(offset) => {
-            println!("  lea rax, [rbp-{}]", offset);
-            println!("  push rax");
-        }
-        _ => unreachable!(),
-    }
+struct Codegen {
+    label: usize, // ラベルの通し番号
+    depth: usize, // push してまだ pop していない数
 }
 
-fn gen_expr(node: &Node) {
-    let (op, lhs, rhs) = match node {
-        Node::Num(n) => {
-            println!("  push {}", n);
-            return;
-        }
-        Node::Var(_) => {
-            gen_lval(node);
-            println!("  pop rax");
-            println!("  mov rax, [rax]");
-            println!("  push rax");
-            return;
-        }
-        Node::Assign(lhs, rhs) => {
-            gen_lval(lhs);
-            gen_expr(rhs);
-            println!("  pop rdi");
-            println!("  pop rax");
-            println!("  mov [rax], rdi");
-            println!("  push rdi");
-            return;
-        }
-        Node::Binary(op, lhs, rhs) => (op, lhs, rhs),
-        Node::Return(_) | Node::If { .. } | Node::For { .. } | Node::Block(_) => unreachable!(),
-    };
+impl Codegen {
+    fn push(&mut self) {
+        println!("  push rax");
+        self.depth += 1;
+    }
 
-    gen_expr(lhs);
-    gen_expr(rhs);
+    fn pop(&mut self, reg: &str) {
+        println!("  pop {}", reg);
+        self.depth -= 1;
+    }
 
-    println!("  pop rdi");
-    println!("  pop rax");
+    fn new_label(&mut self) -> usize {
+        self.label += 1;
+        self.label
+    }
 
-    match op {
-        BinOp::Add => println!("  add rax, rdi"),
-        BinOp::Sub => println!("  sub rax, rdi"),
-        BinOp::Mul => println!("  imul rax, rdi"),
-        BinOp::Div => {
-            println!("  cqo\n");
-            println!("  idiv rdi\n");
-        }
-        BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le => {
-            let set = match op {
-                BinOp::Eq => "sete",
-                BinOp::Ne => "setne",
-                BinOp::Lt => "setl",
-                _ => "setle",
-            };
-            println!("  cmp rax, rdi");
-            println!("  {} al", set);
-            println!("  movzb rax, al");
+    fn gen_addr(&mut self, node: &Node) {
+        match node {
+            Node::Var(offset) => println!("  lea rax, [rbp-{}]", offset),
+            _ => unreachable!(),
         }
     }
 
-    println!("  push rax\n")
-}
-
-fn gen_discard(node: &Node) {
-    gen_expr(node);
-    println!("  pop rax");
-}
-
-fn gen_stmt(node: &Node, label: &mut usize) {
-    match node {
-        Node::Return(e) => {
-            gen_expr(e);
-            println!("  pop rax");
-            println!("  mov rsp, rbp");
-            println!("  pop rbp");
-            println!("  ret")
-        }
-        Node::If { cond, then, els } => {
-            *label += 1;
-            let c = *label;
-            gen_expr(cond);
-            println!("  pop rax");
-            println!("  cmp rax, 0");
-            println!("  je .Lelse{}", c);
-            gen_stmt(then, label);
-            println!("  jmp .Lend{}", c);
-            println!(".Lelse{}:", c);
-            if let Some(e) = els {
-                gen_stmt(e, label);
+    fn gen_expr(&mut self, node: &Node) {
+        match node {
+            Node::Num(n) => println!("  mov rax, {}", n),
+            Node::Var(_) => {
+                self.gen_addr(node);
+                println!("  mov rax, [rax]")
             }
-            println!(".Lend{}:", c);
-        }
-        Node::For {
-            init,
-            cond,
-            inc,
-            body,
-        } => {
-            *label += 1;
-            let c = *label;
-            if let Some(i) = init {
-                gen_discard(i);
+            Node::Assign(lhs, rhs) => {
+                self.gen_addr(lhs);
+                self.push();
+                self.gen_expr(rhs);
+                self.pop("rdi");
+                println!("  mov [rdi], rax");
             }
-            println!(".Lbegin{}:", c);
-            if let Some(cd) = cond {
-                gen_expr(cd);
-                println!("  pop rax");
+            Node::Binary(op, lhs, rhs) => {
+                self.gen_expr(rhs);
+                self.push();
+                self.gen_expr(lhs);
+                self.pop("rdi");
+                match op {
+                    BinOp::Add => println!("  add rax, rdi"),
+                    BinOp::Sub => println!("  sub rax, rdi"),
+                    BinOp::Mul => println!("  imul rax, rdi"),
+                    BinOp::Div => {
+                        println!("  cqo\n");
+                        println!("  idiv rdi\n");
+                    }
+                    BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le => {
+                        let set = match op {
+                            BinOp::Eq => "sete",
+                            BinOp::Ne => "setne",
+                            BinOp::Lt => "setl",
+                            _ => "setle",
+                        };
+                        println!("  cmp rax, rdi");
+                        println!("  {} al", set);
+                        println!("  movzb rax, al");
+                    }
+                }
+            }
+            Node::Return(_) | Node::If { .. } | Node::For { .. } | Node::Block(_) => unreachable!(),
+        };
+    }
+
+    fn gen_stmt(&mut self, node: &Node) {
+        match node {
+            Node::Return(e) => {
+                self.gen_expr(e);
+                println!("  jmp .L.return");
+            }
+            Node::If { cond, then, els } => {
+                let c = self.new_label();
+                self.gen_expr(cond);
                 println!("  cmp rax, 0");
-                println!("  je .Lend{}", c);
+                println!("  je .L.else.{}", c);
+                self.gen_stmt(then);
+                println!("  jmp .L.end.{}", c);
+                println!(".L.else.{}:", c);
+                if let Some(e) = els {
+                    self.gen_stmt(e);
+                }
+                println!(".L.end.{}:", c);
             }
-            gen_stmt(body, label);
-            if let Some(i) = inc {
-                gen_discard(i);
+            Node::For {
+                init,
+                cond,
+                inc,
+                body,
+            } => {
+                let c = self.new_label();
+                if let Some(i) = init {
+                    self.gen_expr(i);
+                }
+                println!(".L.begin.{}:", c);
+                if let Some(cd) = cond {
+                    self.gen_expr(cd);
+                    println!("  cmp rax, 0");
+                    println!("  je .L.end.{}", c);
+                }
+                self.gen_stmt(body);
+                if let Some(i) = inc {
+                    self.gen_expr(i);
+                }
+                println!("  jmp .L.begin.{}", c);
+                println!(".L.end.{}:", c);
             }
-            println!("  jmp .Lbegin{}", c);
-            println!(".Lend{}:", c);
+            Node::Block(stmts) => {
+                for s in stmts {
+                    self.gen_stmt(s);
+                }
+            }
+            _ => self.gen_expr(node),
         }
-        Node::Block(stmts) => {
-            for s in stmts {
-                gen_stmt(s, label);
-            }
-        }
-        _ => gen_discard(node),
     }
 }
 
 pub fn gen_program(prog: &Program) {
+    let mut cg = Codegen { label: 0, depth: 0 };
+
     println!(".intel_syntax noprefix");
     println!(".globl main");
     println!("main:");
@@ -138,11 +135,12 @@ pub fn gen_program(prog: &Program) {
     println!("  mov rbp, rsp");
     println!("  sub rsp, {}", prog.stack_size);
 
-    let mut label = 0;
     for stmt in &prog.body {
-        gen_stmt(stmt, &mut label);
+        cg.gen_stmt(stmt);
     }
+    assert_eq!(cg.depth, 0);
 
+    println!(".L.return:");
     println!("  mov rsp, rbp");
     println!("  pop rbp");
     println!("  ret");
