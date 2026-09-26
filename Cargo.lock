@@ -3,5 +3,5 @@
 version = 4
 
 [[package]]
-name = "minicc-rust"
+name = "rcc"
 version = "0.1.0"
