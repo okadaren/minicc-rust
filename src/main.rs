@@ -41,7 +41,7 @@ pub fn tokenize(src: &str) -> Vec<Token> {
             });
             continue;
         }
-        if b"+-".contains(&c) {
+        if b"+-*/()".contains(&c) {
             toks.push(Token {
                 kind: TokenKind::Punct((c as char).to_string()),
                 pos: i,
@@ -58,13 +58,39 @@ pub fn tokenize(src: &str) -> Vec<Token> {
     toks
 }
 
-struct Cursor<'a> {
+#[derive(Debug, Clone, Copy)]
+pub enum BinOp {
+    Add,
+    Sub,
+    Mul,
+    Div,
+}
+
+#[derive(Debug)]
+pub enum Node {
+    Num(i64),
+    Binary(BinOp, Box<Node>, Box<Node>),
+}
+
+fn bin(op: BinOp, l: Node, r: Node) -> Node {
+    Node::Binary(op, Box::new(l), Box::new(r))
+}
+
+struct Parser<'a> {
     src: &'a str,
     toks: Vec<Token>,
     pos: usize,
 }
 
-impl<'a> Cursor<'a> {
+impl<'a> Parser<'a> {
+    fn new(src: &'a str) -> Self {
+        Parser {
+            src,
+            toks: tokenize(src),
+            pos: 0,
+        }
+    }
+
     fn peek(&self) -> &Token {
         &self.toks[self.pos]
     }
@@ -100,6 +126,71 @@ impl<'a> Cursor<'a> {
     fn at_eof(&self) -> bool {
         self.peek().kind == TokenKind::Eof
     }
+
+    fn expr(&mut self) -> Node {
+        let mut node = self.mul();
+
+        loop {
+            if self.consume("+") {
+                node = bin(BinOp::Add, node, self.mul())
+            } else if self.consume("-") {
+                node = bin(BinOp::Sub, node, self.mul())
+            } else {
+                return node;
+            }
+        }
+    }
+
+    fn mul(&mut self) -> Node {
+        let mut node = self.primary();
+
+        loop {
+            if self.consume("*") {
+                node = bin(BinOp::Mul, node, self.primary())
+            } else if self.consume("/") {
+                node = bin(BinOp::Div, node, self.primary())
+            } else {
+                return node;
+            }
+        }
+    }
+
+    fn primary(&mut self) -> Node {
+        if self.consume("(") {
+            let node = self.expr();
+            self.expect(")");
+            return node;
+        }
+        Node::Num(self.expect_number())
+    }
+}
+
+fn gen_expr(node: &Node) {
+    let (op, lhs, rhs) = match node {
+        Node::Num(n) => {
+            println!("  push {}", n);
+            return;
+        }
+        Node::Binary(op, lhs, rhs) => (op, lhs, rhs),
+    };
+
+    gen_expr(lhs);
+    gen_expr(rhs);
+
+    println!("  pop rdi");
+    println!("  pop rax");
+
+    match op {
+        BinOp::Add => println!("  add rax, rdi"),
+        BinOp::Sub => println!("  sub rax, rdi"),
+        BinOp::Mul => println!("  imul rax, rdi"),
+        BinOp::Div => {
+            println!("  cqo\n");
+            println!("  idiv rdi\n");
+        }
+    }
+
+    println!("  push rax\n")
 }
 
 fn main() {
@@ -109,27 +200,18 @@ fn main() {
         process::exit(1);
     }
     let src = &args[1];
-    let mut cur = Cursor {
-        src,
-        toks: tokenize(src),
-        pos: 0,
-    };
+    let mut parser = Parser::new(src);
+    let node = parser.expr();
+    if !parser.at_eof() {
+        error_at(src, parser.peek().pos, "extra tokens")
+    }
 
     println!(".intel_syntax noprefix");
     println!(".globl main");
     println!("main:");
 
-    // 式の最初は数でなければならない
-    println!("  mov rax, {}", cur.expect_number());
+    gen_expr(&node);
 
-    while !cur.at_eof() {
-        if cur.consume("+") {
-            println!("  add rax, {}", cur.expect_number());
-            continue;
-        }
-        cur.expect("-");
-        println!("  sub rax, {}", cur.expect_number());
-    }
-
-    println!("  ret");
+    println!("  pop rax");
+    println!("  ret")
 }

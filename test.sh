@@ -20,7 +20,8 @@ assert() {
 assert 0 0
 assert 42 42
 assert 32 "15+22-5"
-echo OK
+assert 47 "5+6*7"
+assert 15 "5*(9-6)"
+assert 4 "(3+5) / 2"
 
-cargo clean
-rm -f tmp*
+echo OK
