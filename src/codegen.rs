@@ -26,7 +26,8 @@ impl Codegen {
 
     fn gen_addr(&mut self, node: &Node) {
         match node {
-            Node::Var(offset) => println!("  lea rax, [rbp-{}]", offset),
+            Node::Var { offset, .. } => println!("  lea rax, [rbp-{}]", offset),
+            Node::Deref(e) => self.gen_expr(e),
             _ => unreachable!(),
         }
     }
@@ -34,9 +35,14 @@ impl Codegen {
     fn gen_expr(&mut self, node: &Node) {
         match node {
             Node::Num(n) => println!("  mov rax, {}", n),
-            Node::Var(_) => {
+            Node::Var { .. } => {
                 self.gen_addr(node);
-                println!("  mov rax, [rax]")
+                println!("  mov rax, [rax]");
+            }
+            Node::Addr(e) => self.gen_addr(e),
+            Node::Deref(e) => {
+                self.gen_expr(e);
+                println!("  mov rax, [rax]");
             }
             Node::Assign(lhs, rhs) => {
                 self.gen_addr(lhs);

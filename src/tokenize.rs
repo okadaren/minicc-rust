@@ -14,7 +14,7 @@ pub struct Token {
     pub pos: usize,
 }
 
-const KEYWORDS: [&str; 5] = ["return", "if", "else", "while", "for"];
+const KEYWORDS: [&str; 6] = ["return", "if", "else", "while", "for", "int"];
 
 pub fn error_at(src: &str, pos: usize, msg: &str) -> ! {
     eprintln!("{}", src);
@@ -79,7 +79,7 @@ pub fn tokenize(src: &str) -> Vec<Token> {
             i += 2;
             continue;
         }
-        if b"+-*/()<>=;{},".contains(&c) {
+        if b"+-*/()<>=;{},&".contains(&c) {
             toks.push(Token {
                 kind: TokenKind::Punct((c as char).to_string()),
                 pos: i,

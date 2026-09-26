@@ -1,6 +1,7 @@
 mod codegen;
 mod parse;
 mod tokenize;
+mod types;
 
 use std::{env, process};
 

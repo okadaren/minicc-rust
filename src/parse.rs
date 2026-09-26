@@ -1,4 +1,5 @@
 use crate::tokenize::{Token, TokenKind, error_at, tokenize};
+use crate::types::{Type, type_of};
 
 #[derive(Debug, Clone, Copy)]
 pub enum BinOp {
@@ -15,7 +16,10 @@ pub enum BinOp {
 #[derive(Debug)]
 pub enum Node {
     Num(i64),
-    Var(i64),
+    Var {
+        offset: i64,
+        ty: Type,
+    },
     Binary(BinOp, Box<Node>, Box<Node>),
     Assign(Box<Node>, Box<Node>),
     Return(Box<Node>),
@@ -32,11 +36,14 @@ pub enum Node {
     },
     Block(Vec<Node>),
     Call(String, Vec<Node>),
+    Addr(Box<Node>),
+    Deref(Box<Node>),
 }
 
 struct LVar {
     name: String,
     offset: i64,
+    ty: Type,
 }
 
 pub struct Function {
@@ -113,16 +120,32 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn var_offset(&mut self, name: &str) -> i64 {
-        if let Some(var) = self.locals.iter().find(|v| v.name == name) {
-            return var.offset;
+    fn expect_ident(&mut self, what: &str) -> String {
+        let pos = self.peek().pos;
+        self.consume_ident()
+            .unwrap_or_else(|| error_at(self.src, pos, &format!("not {}", what)))
+    }
+
+    fn parse_type(&mut self) -> Type {
+        self.expect("int");
+        let mut ty = Type::Int;
+        while self.consume("*") {
+            ty = Type::pointer_to(ty);
+        }
+        ty
+    }
+
+    fn declare_var(&mut self, name: String, ty: Type, pos: usize) -> i64 {
+        if self.locals.iter().any(|v| v.name == name) {
+            error_at(self.src, pos, "same name variable is defined");
         }
         let offset = (self.locals.len() as i64 + 1) * 8;
-        self.locals.push(LVar {
-            name: name.to_string(),
-            offset,
-        });
+        self.locals.push(LVar { name, offset, ty });
         offset
+    }
+
+    fn find_var(&self, name: &str) -> Option<&LVar> {
+        self.locals.iter().find(|v| v.name == name)
     }
 
     fn at_eof(&self) -> bool {
@@ -141,9 +164,8 @@ impl<'a> Parser<'a> {
         self.locals.clear();
 
         let pos = self.peek().pos;
-        let name = self
-            .consume_ident()
-            .unwrap_or_else(|| error_at(self.src, pos, "not function name"));
+        self.expect("int");
+        let name = self.expect_ident("function name");
 
         self.expect("(");
         let mut params = Vec::new();
@@ -151,14 +173,13 @@ impl<'a> Parser<'a> {
             if !params.is_empty() {
                 self.expect(",");
             }
+            let ty = self.parse_type();
             let pos = self.peek().pos;
-            let param = self
-                .consume_ident()
-                .unwrap_or_else(|| error_at(self.src, pos, "not argment name"));
-            params.push(self.var_offset(&param));
+            let param = self.expect_ident("argument name");
+            params.push(self.declare_var(param, ty, pos));
         }
         if params.len() > 6 {
-            error_at(self.src, pos, "argments limit is 6");
+            error_at(self.src, pos, "arguments limit is 6");
         }
 
         self.expect("{");
@@ -180,6 +201,15 @@ impl<'a> Parser<'a> {
     }
 
     fn stmt(&mut self) -> Node {
+        if matches!(&self.peek().kind, TokenKind::Keyword(k) if k == "int") {
+            let ty = self.parse_type();
+            let pos = self.peek().pos;
+            let name = self.expect_ident("variable name");
+            self.declare_var(name, ty, pos);
+            self.expect(";");
+            return Node::Block(Vec::new());
+        }
+
         if self.consume("return") {
             let node = self.expr();
             self.expect(";");
@@ -260,8 +290,8 @@ impl<'a> Parser<'a> {
         let node = self.equality();
 
         if self.consume("=") {
-            if !matches!(node, Node::Var(_)) {
-                error_at(self.src, pos, "lhs is not variable");
+            if !matches!(node, Node::Var { .. } | Node::Deref(_)) {
+                error_at(self.src, pos, "the lhs must be a variable or a * expr");
             }
             return Node::Assign(Box::new(node), Box::new(self.assign()));
         }
@@ -319,9 +349,9 @@ impl<'a> Parser<'a> {
 
         loop {
             if self.consume("*") {
-                node = bin(BinOp::Mul, node, self.unary())
+                node = bin(BinOp::Mul, node, self.unary());
             } else if self.consume("/") {
-                node = bin(BinOp::Div, node, self.unary())
+                node = bin(BinOp::Div, node, self.unary());
             } else {
                 return node;
             }
@@ -335,6 +365,22 @@ impl<'a> Parser<'a> {
         if self.consume("-") {
             return bin(BinOp::Sub, Node::Num(0), self.unary());
         }
+        if self.consume("*") {
+            let pos = self.peek().pos;
+            let node = self.unary();
+            if !matches!(type_of(&node), Type::Ptr(_)) {
+                error_at(self.src, pos, "can't deref because this is not pointer")
+            }
+            return Node::Deref(Box::new(node));
+        }
+        if self.consume("&") {
+            let pos = self.peek().pos;
+            let node = self.unary();
+            if !matches!(node, Node::Var { .. } | Node::Deref(_)) {
+                error_at(self.src, pos, "can't take the address of this")
+            }
+            return Node::Addr(Box::new(node));
+        }
         self.primary()
     }
 
@@ -344,6 +390,8 @@ impl<'a> Parser<'a> {
             self.expect(")");
             return node;
         }
+
+        let pos = self.peek().pos;
         if let Some(name) = self.consume_ident() {
             if self.consume("(") {
                 let mut args = Vec::new();
@@ -354,11 +402,17 @@ impl<'a> Parser<'a> {
                     args.push(self.assign());
                 }
                 if args.len() > 6 {
-                    error_at(self.src, self.peek().pos, "argments limit is 6")
+                    error_at(self.src, self.peek().pos, "arguments limit is 6")
                 }
                 return Node::Call(name, args);
             }
-            return Node::Var(self.var_offset(&name));
+            return match self.find_var(&name) {
+                Some(var) => Node::Var {
+                    offset: var.offset,
+                    ty: var.ty.clone(),
+                },
+                None => error_at(self.src, pos, "not defined variable"),
+            };
         }
         Node::Num(self.expect_number())
     }
