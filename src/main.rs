@@ -1,10 +1,15 @@
 mod codegen;
+mod error;
 mod parse;
 mod tokenize;
 mod types;
 
 use std::io::Read;
+use std::process::ExitCode;
 use std::{env, fs, io, process};
+
+use crate::error::Result;
+use crate::parse::{Parser, Program};
 
 fn read_file(path: &str) -> String {
     let mut src = if path == "-" {
@@ -27,16 +32,27 @@ fn read_file(path: &str) -> String {
     src
 }
 
-fn main() {
+fn compile(src: &str) -> Result<Program> {
+    Parser::new(src)?.program()
+}
+
+fn main() -> ExitCode {
     let args: Vec<String> = env::args().collect();
     if args.len() != 2 {
         eprintln!("usage: rcc <file>");
         process::exit(1);
     }
     let path = &args[1];
-    tokenize::FILENAME.set(path.clone()).unwrap();
-
     let src = read_file(path);
-    let prog = parse::Parser::new(&src).program();
-    codegen::gen_program(&prog);
+
+    match compile(&src) {
+        Ok(prog) => {
+            codegen::gen_program(&prog);
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            e.report(path, &src);
+            ExitCode::FAILURE
+        }
+    }
 }
