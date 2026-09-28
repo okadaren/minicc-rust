@@ -6,30 +6,24 @@ mod types;
 
 use std::io::Read;
 use std::process::ExitCode;
-use std::{env, fs, io, process};
+use std::{env, fs, io};
 
 use crate::error::Result;
 use crate::parse::{Parser, Program};
 
-fn read_file(path: &str) -> String {
+fn read_file(path: &str) -> io::Result<String> {
     let mut src = if path == "-" {
         let mut buf = String::new();
-        io::stdin().read_to_string(&mut buf).unwrap_or_else(|e| {
-            eprintln!("can't read stdin: {}", e);
-            process::exit(1);
-        });
+        io::stdin().read_to_string(&mut buf)?;
         buf
     } else {
-        fs::read_to_string(path).unwrap_or_else(|e| {
-            eprintln!("{} can't read: {}", path, e);
-            process::exit(1);
-        })
+        fs::read_to_string(path)?
     };
 
     if !src.ends_with('\n') {
         src.push('\n');
     }
-    src
+    Ok(src)
 }
 
 fn compile(src: &str) -> Result<Program> {
@@ -38,12 +32,17 @@ fn compile(src: &str) -> Result<Program> {
 
 fn main() -> ExitCode {
     let args: Vec<String> = env::args().collect();
-    if args.len() != 2 {
+    let [_, path] = args.as_slice() else {
         eprintln!("usage: rcc <file>");
-        process::exit(1);
-    }
-    let path = &args[1];
-    let src = read_file(path);
+        return ExitCode::FAILURE;
+    };
+    let src = match read_file(path) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("{}: {}", path, e);
+            return ExitCode::FAILURE;
+        }
+    };
 
     match compile(&src) {
         Ok(prog) => {
