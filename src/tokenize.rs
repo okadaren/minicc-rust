@@ -250,7 +250,7 @@ pub fn tokenize(src: &str) -> Result<Vec<Token>> {
             continue;
         }
         let c = src[i..].chars().next().unwrap();
-        return error_at(i, &format!("unexpected character '{}'", c));
+        return error_at(i, format!("unexpected character '{}'", c));
     }
     toks.push(Token {
         kind: TokenKind::Eof,

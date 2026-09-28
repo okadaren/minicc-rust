@@ -111,7 +111,7 @@ impl Parser {
     // 次が記号でなければエラー
     fn expect(&mut self, op: Punct) -> Result<()> {
         if !self.consume(op) {
-            return error_at(self.peek().pos, &format!("expected '{}'", op));
+            return error_at(self.peek().pos, format!("expected '{}'", op));
         }
         Ok(())
     }
@@ -141,7 +141,7 @@ impl Parser {
         let pos = self.peek().pos;
         match self.consume_ident() {
             Some(name) => Ok(name),
-            None => error_at(pos, &format!("expected {}", what)),
+            None => error_at(pos, format!("expected {}", what)),
         }
     }
 
@@ -167,7 +167,7 @@ impl Parser {
 
     fn declare_var(&mut self, name: String, ty: Type, pos: usize) -> Result<i64> {
         if self.locals.iter().any(|v| v.name == name) {
-            return error_at(pos, &format!("redefinition of '{}'", name));
+            return error_at(pos, format!("redefinition of '{}'", name));
         }
         self.stack = (self.stack + ty.size() + 7) / 8 * 8;
         let offset = self.stack;
@@ -212,7 +212,7 @@ impl Parser {
         let ty = self.array_suffix(ty)?;
         self.expect(Punct::Semi)?;
         if self.globals.iter().any(|g| g.name == name) {
-            return error_at(pos, &format!("redefinition of '{}'", name));
+            return error_at(pos, format!("redefinition of '{}'", name));
         }
         self.globals.push(GlobalVar {
             name,
@@ -575,7 +575,7 @@ impl Parser {
                     ty: g.ty.clone(),
                 });
             }
-            return error_at(pos, &format!("undefined variable '{}'", name));
+            return error_at(pos, format!("undefined variable '{}'", name));
         }
         Ok(Node::Num(self.expect_number()?))
     }
