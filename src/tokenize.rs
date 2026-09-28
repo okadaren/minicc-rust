@@ -1,13 +1,149 @@
+use std::fmt;
+
 use crate::error::{Result, error_at};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Punct {
+    Plus,     // +
+    Minus,    // -
+    Star,     // *
+    Slash,    // /
+    Eq,       // ==
+    Ne,       // !=
+    Lt,       // <
+    Le,       // <=
+    Gt,       // >
+    Ge,       // >=
+    Assign,   // =
+    LParen,   // (
+    RParen,   // )
+    LBrace,   // {
+    RBrace,   // }
+    LBracket, // [
+    RBracket, // ]
+    Semi,     // ;
+    Comma,    // ,
+    Amp,      // &
+}
+
+impl Punct {
+    pub const ALL: [Punct; 20] = [
+        Punct::Eq,
+        Punct::Ne,
+        Punct::Le,
+        Punct::Ge,
+        Punct::Plus,
+        Punct::Minus,
+        Punct::Star,
+        Punct::Slash,
+        Punct::Lt,
+        Punct::Gt,
+        Punct::Assign,
+        Punct::LParen,
+        Punct::RParen,
+        Punct::LBrace,
+        Punct::RBrace,
+        Punct::LBracket,
+        Punct::RBracket,
+        Punct::Semi,
+        Punct::Comma,
+        Punct::Amp,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Punct::Plus => "+",
+            Punct::Minus => "-",
+            Punct::Star => "*",
+            Punct::Slash => "/",
+            Punct::Eq => "==",
+            Punct::Ne => "!=",
+            Punct::Lt => "<",
+            Punct::Le => "<=",
+            Punct::Gt => ">",
+            Punct::Ge => ">=",
+            Punct::Assign => "=",
+            Punct::LParen => "(",
+            Punct::RParen => ")",
+            Punct::LBrace => "{",
+            Punct::RBrace => "}",
+            Punct::LBracket => "[",
+            Punct::RBracket => "]",
+            Punct::Semi => ";",
+            Punct::Comma => ",",
+            Punct::Amp => "&",
+        }
+    }
+}
+
+impl fmt::Display for Punct {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Keyword {
+    Return,
+    If,
+    Else,
+    While,
+    For,
+    Int,
+    Char,
+    Sizeof,
+}
+
+impl Keyword {
+    pub const ALL: [Keyword; 8] = [
+        Keyword::Return,
+        Keyword::If,
+        Keyword::Else,
+        Keyword::While,
+        Keyword::For,
+        Keyword::Int,
+        Keyword::Char,
+        Keyword::Sizeof,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Keyword::Return => "return",
+            Keyword::If => "if",
+            Keyword::Else => "else",
+            Keyword::While => "while",
+            Keyword::For => "for",
+            Keyword::Int => "int",
+            Keyword::Char => "char",
+            Keyword::Sizeof => "sizeof",
+        }
+    }
+
+    pub fn lookup(word: &str) -> Option<Keyword> {
+        Keyword::ALL.into_iter().find(|kw| kw.as_str() == word)
+    }
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum TokenKind {
-    Punct(String),
-    Keyword(String),
+    Punct(Punct),
+    Keyword(Keyword),
     Ident(String),
     Num(i64),
     Str(Vec<u8>),
     Eof,
+}
+
+impl From<Punct> for TokenKind {
+    fn from(p: Punct) -> Self {
+        TokenKind::Punct(p)
+    }
+}
+
+impl From<Keyword> for TokenKind {
+    fn from(k: Keyword) -> Self {
+        TokenKind::Keyword(k)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -15,10 +151,6 @@ pub struct Token {
     pub kind: TokenKind,
     pub pos: usize,
 }
-
-const KEYWORDS: [&str; 8] = [
-    "return", "if", "else", "while", "for", "int", "sizeof", "char",
-];
 
 fn is_ident1(c: u8) -> bool {
     c.is_ascii_alphabetic() || c == b'_'
@@ -100,34 +232,21 @@ pub fn tokenize(src: &str) -> Result<Vec<Token>> {
             while i < s.len() && is_ident2(s[i]) {
                 i += 1;
             }
-            let word = src[start..i].to_string();
-            let kind = if KEYWORDS.contains(&word.as_str()) {
-                TokenKind::Keyword(word)
-            } else {
-                TokenKind::Ident(word)
+            let word = &src[start..i];
+            let kind = match Keyword::lookup(word) {
+                Some(kw) => TokenKind::Keyword(kw),
+                None => TokenKind::Ident(word.to_string()),
             };
             toks.push(Token { kind, pos: start });
             continue;
         }
-        // 2文字の記号
-        let rest = &src[i..];
-        if let Some(op) = ["==", "!=", "<=", ">="]
-            .iter()
-            .find(|op| rest.starts_with(**op))
-        {
+
+        if let Some(&p) = Punct::ALL.iter().find(|p| src[i..].starts_with(p.as_str())) {
             toks.push(Token {
-                kind: TokenKind::Punct(op.to_string()),
+                kind: TokenKind::Punct(p),
                 pos: i,
             });
-            i += 2;
-            continue;
-        }
-        if b"+-*/()<>=;{},&[]".contains(&c) {
-            toks.push(Token {
-                kind: TokenKind::Punct((c as char).to_string()),
-                pos: i,
-            });
-            i += 1;
+            i += p.as_str().len();
             continue;
         }
         let c = src[i..].chars().next().unwrap();
@@ -181,5 +300,21 @@ mod tests {
     #[test]
     fn unexpected_non_ascii_character() {
         assert_error("int ^あ;", "unexpected character 'あ'");
+    }
+
+    #[test]
+    fn every_punct_is_tokenized() {
+        for p in Punct::ALL {
+            let toks = tokenize(p.as_str()).unwrap();
+            assert_eq!(toks[0].kind, TokenKind::Punct(p), "{}", p.as_str());
+            assert_eq!(toks[1].kind, TokenKind::Eof, "{}", p.as_str());
+        }
+    }
+
+    #[test]
+    fn keyword_and_ident() {
+        let toks = tokenize("return returnx").unwrap();
+        assert_eq!(toks[0].kind, TokenKind::Keyword(Keyword::Return));
+        assert_eq!(toks[1].kind, TokenKind::Ident("returnx".to_string()));
     }
 }
