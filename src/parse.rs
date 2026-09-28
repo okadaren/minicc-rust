@@ -578,3 +578,181 @@ impl Parser {
         Ok(Node::Num(self.expect_number()?))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::compile;
+
+    // ソース中の `^` の位置で msg のエラーになることを確認する
+    // `^` は取り除いてからコンパイルする
+    fn assert_error(marked: &str, msg: &str) {
+        let pos = marked.find('^').expect("no ^ marker");
+        let src = marked.replacen('^', "", 1);
+        let err = compile(&src)
+            .err()
+            .unwrap_or_else(|| panic!("expected error '{}' but compiled: {}", msg, src));
+        assert_eq!((err.pos, err.msg.as_str()), (pos, msg), "src: {}", src);
+    }
+
+    #[test]
+    fn valid_program_compiles() {
+        let src = "int g; int add(int a, int b) { return a + b; }
+                   int main() { int *p; int a[3]; p = a; *(p + 1) = 2;
+                                return add(a[1], sizeof(a)); }";
+        assert!(compile(src).is_ok());
+    }
+
+    // 期待したトークンがない
+
+    #[test]
+    fn expected_semicolon() {
+        assert_error("int main() { return 1 ^}", "expected ';'");
+    }
+
+    #[test]
+    fn expected_close_paren() {
+        assert_error("int main() { return (1 + 2^; }", "expected ')'");
+    }
+
+    #[test]
+    fn expected_close_bracket() {
+        assert_error("int a[3^;", "expected ']'");
+    }
+
+    #[test]
+    fn expected_number() {
+        assert_error("int main() { return 1 + ^; }", "expected a number");
+    }
+
+    #[test]
+    fn expected_array_length() {
+        assert_error("int a[^x];", "expected a number");
+    }
+
+    #[test]
+    fn expected_variable_name() {
+        assert_error("int main() { int ^; }", "expected variable name");
+    }
+
+    #[test]
+    fn expected_type_name() {
+        assert_error("^1;", "expected a type name");
+    }
+
+    #[test]
+    fn expected_close_brace_in_function() {
+        assert_error("int main() { return 1;^", "expected '}' before end of file");
+    }
+
+    #[test]
+    fn expected_close_brace_in_block() {
+        assert_error(
+            "int main() { { return 1;^",
+            "expected '}' before end of file",
+        );
+    }
+
+    // 変数
+
+    #[test]
+    fn redefinition_of_local() {
+        assert_error("int main() { int a; int ^a; }", "redefinition of 'a'");
+    }
+
+    #[test]
+    fn redefinition_of_param() {
+        assert_error("int f(int a, int ^a) { return 0; }", "redefinition of 'a'");
+    }
+
+    #[test]
+    fn redefinition_of_global() {
+        assert_error("int x; int ^x;", "redefinition of 'x'");
+    }
+
+    #[test]
+    fn undefined_variable() {
+        assert_error("int main() { return ^y; }", "undefined variable 'y'");
+    }
+
+    // 関数
+
+    #[test]
+    fn too_many_parameters() {
+        assert_error(
+            "^int f(int a, int b, int c, int d, int e, int f, int g) { return 0; }",
+            "too many parameters (max 6)",
+        );
+    }
+
+    #[test]
+    fn too_many_arguments() {
+        assert_error(
+            "int main() { return ^foo(1, 2, 3, 4, 5, 6, 7); }",
+            "too many arguments (max 6)",
+        );
+    }
+
+    // 代入
+
+    #[test]
+    fn assign_to_non_lvalue() {
+        assert_error("int main() { ^1 = 2; }", "expression is not assignable");
+    }
+
+    #[test]
+    fn assign_to_array() {
+        assert_error(
+            "int main() { int a[2]; int b[2]; ^a = b; }",
+            "array type is not assignable",
+        );
+    }
+
+    // ポインタ演算
+
+    #[test]
+    fn add_two_pointers() {
+        assert_error(
+            "int main() { int *p; int *q; return p ^+ q; }",
+            "invalid operands to '+' (pointer + pointer)",
+        );
+    }
+
+    #[test]
+    fn sub_pointer_from_integer() {
+        assert_error(
+            "int main() { int *p; return 1 ^- p; }",
+            "invalid operands to '-' (integer - pointer)",
+        );
+    }
+
+    #[test]
+    fn deref_non_pointer() {
+        assert_error(
+            "int main() { return *^1; }",
+            "cannot dereference a non-pointer value",
+        );
+    }
+
+    #[test]
+    fn address_of_non_lvalue() {
+        assert_error(
+            "int main() { return &^1; }",
+            "cannot take the address of this expression",
+        );
+    }
+
+    #[test]
+    fn subscript_non_pointer() {
+        assert_error(
+            "int main() { return 1^[2]; }",
+            "subscripted value is not an array or pointer",
+        );
+    }
+
+    // トークナイズのエラーも compile から返ってくる
+
+    #[test]
+    fn tokenize_error_is_propagated() {
+        assert_error("int main() { return ^@; }", "unexpected character '@'");
+    }
+}

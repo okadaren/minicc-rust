@@ -7,7 +7,8 @@ set -e
 cargo build -q
 RCC=./target/debug/rcc
 
-gcc -c -o tmp-helper.o tests/helper.c
-$RCC tests/test.c > tmp-test.s
-gcc -static -o tmp-test tmp-test.s tmp-helper.o
-./tmp-test
+cargo test -q
+mkdir -p ./tmp
+$RCC tests/test.c > tmp/tmp-test.s
+gcc -static -o tmp/tmp-test tmp/tmp-test.s tmp/tmp-helper.o
+./tmp/tmp-test
