@@ -220,7 +220,9 @@ pub fn tokenize(src: &str) -> Result<Vec<Token>> {
             while i < s.len() && s[i].is_ascii_digit() {
                 i += 1;
             }
-            let n = src[start..i].parse().unwrap();
+            let Ok(n) = src[start..i].parse() else {
+                return error_at(start, "integer literal too large");
+            };
             toks.push(Token {
                 kind: TokenKind::Num(n),
                 pos: start,
@@ -316,5 +318,10 @@ mod tests {
         let toks = tokenize("return returnx").unwrap();
         assert_eq!(toks[0].kind, TokenKind::Keyword(Keyword::Return));
         assert_eq!(toks[1].kind, TokenKind::Ident("returnx".to_string()));
+    }
+
+    #[test]
+    fn too_large_integer_literal() {
+        assert_error("^99999999999999999999", "integer literal too large");
     }
 }
