@@ -1,5 +1,5 @@
 use crate::error::{Result, error_at};
-use crate::tokenize::{Token, TokenKind, tokenize};
+use crate::tokenize::{Keyword, Punct, Token, TokenKind, tokenize};
 use crate::types::{Type, type_of};
 
 #[derive(Debug, Clone, Copy)]
@@ -99,8 +99,8 @@ impl Parser {
     }
 
     // 次が記号なら読み進めてtrueを返す
-    fn consume(&mut self, op: &str) -> bool {
-        if matches!(&self.peek().kind, TokenKind::Punct(s) | TokenKind::Keyword(s) if s == op) {
+    fn consume(&mut self, kind: impl Into<TokenKind>) -> bool {
+        if self.peek().kind == kind.into() {
             self.pos += 1;
             true
         } else {
@@ -109,7 +109,7 @@ impl Parser {
     }
 
     // 次が記号でなければエラー
-    fn expect(&mut self, op: &str) -> Result<()> {
+    fn expect(&mut self, op: Punct) -> Result<()> {
         if !self.consume(op) {
             return error_at(self.peek().pos, &format!("expected '{}'", op));
         }
@@ -146,18 +146,20 @@ impl Parser {
     }
 
     fn is_typename(&self) -> bool {
-        matches!(&self.peek().kind, TokenKind::Keyword(k) if k == "int" || k == "char")
+        matches!(
+            &self.peek().kind,
+            TokenKind::Keyword(Keyword::Int | Keyword::Char)
+        )
     }
 
     fn parse_type(&mut self) -> Result<Type> {
-        let mut ty = if self.consume("char") {
-            Type::Char
-        } else if self.consume("int") {
-            Type::Int
-        } else {
-            return error_at(self.peek().pos, "expected a type name");
+        let mut ty = match self.peek().kind {
+            TokenKind::Keyword(Keyword::Char) => Type::Char,
+            TokenKind::Keyword(Keyword::Int) => Type::Int,
+            _ => return error_at(self.peek().pos, "expected a type name"),
         };
-        while self.consume("*") {
+        self.pos += 1;
+        while self.consume(Punct::Star) {
             ty = Type::pointer_to(ty);
         }
         Ok(ty)
@@ -198,7 +200,7 @@ impl Parser {
         let start = self.pos;
         self.parse_type()?;
         self.expect_ident("name")?;
-        let result = matches!(&self.peek().kind, TokenKind::Punct(s) if s == "(");
+        let result = matches!(&self.peek().kind, TokenKind::Punct(Punct::LParen));
         self.pos = start;
         Ok(result)
     }
@@ -208,7 +210,7 @@ impl Parser {
         let pos = self.peek().pos;
         let name = self.expect_ident("variable name")?;
         let ty = self.array_suffix(ty)?;
-        self.expect(";")?;
+        self.expect(Punct::Semi)?;
         if self.globals.iter().any(|g| g.name == name) {
             return error_at(pos, &format!("redefinition of '{}'", name));
         }
@@ -221,9 +223,9 @@ impl Parser {
     }
 
     fn array_suffix(&mut self, ty: Type) -> Result<Type> {
-        if self.consume("[") {
+        if self.consume(Punct::LBracket) {
             let len = self.expect_number()?;
-            self.expect("]")?;
+            self.expect(Punct::RBracket)?;
             return Ok(Type::Array(Box::new(ty), len as usize));
         }
         Ok(ty)
@@ -237,11 +239,11 @@ impl Parser {
         self.parse_type()?;
         let name = self.expect_ident("function name")?;
 
-        self.expect("(")?;
+        self.expect(Punct::LParen)?;
         let mut params = Vec::new();
-        while !self.consume(")") {
+        while !self.consume(Punct::RParen) {
             if !params.is_empty() {
-                self.expect(",")?;
+                self.expect(Punct::Comma)?;
             }
             let ty = self.parse_type()?;
             let pos = self.peek().pos;
@@ -253,9 +255,9 @@ impl Parser {
             return error_at(pos, "too many parameters (max 6)");
         }
 
-        self.expect("{")?;
+        self.expect(Punct::LBrace)?;
         let mut body = Vec::new();
-        while !self.consume("}") {
+        while !self.consume(Punct::RBrace) {
             if self.at_eof() {
                 return error_at(self.peek().pos, "expected '}' before end of file");
             }
@@ -278,22 +280,22 @@ impl Parser {
             let name = self.expect_ident("variable name")?;
             let ty = self.array_suffix(ty)?;
             self.declare_var(name, ty, pos)?;
-            self.expect(";")?;
+            self.expect(Punct::Semi)?;
             return Ok(Node::Block(Vec::new()));
         }
 
-        if self.consume("return") {
+        if self.consume(Keyword::Return) {
             let node = self.expr()?;
-            self.expect(";")?;
+            self.expect(Punct::Semi)?;
             return Ok(Node::Return(Box::new(node)));
         }
 
-        if self.consume("if") {
-            self.expect("(")?;
+        if self.consume(Keyword::If) {
+            self.expect(Punct::LParen)?;
             let cond = Box::new(self.expr()?);
-            self.expect(")")?;
+            self.expect(Punct::RParen)?;
             let then = Box::new(self.stmt()?);
-            let els = if self.consume("else") {
+            let els = if self.consume(Keyword::Else) {
                 Some(Box::new(self.stmt()?))
             } else {
                 None
@@ -301,10 +303,10 @@ impl Parser {
             return Ok(Node::If { cond, then, els });
         }
 
-        if self.consume("while") {
-            self.expect("(")?;
+        if self.consume(Keyword::While) {
+            self.expect(Punct::LParen)?;
             let cond = Some(Box::new(self.expr()?));
-            self.expect(")")?;
+            self.expect(Punct::RParen)?;
             let body = Box::new(self.stmt()?);
             return Ok(Node::For {
                 init: None,
@@ -314,11 +316,11 @@ impl Parser {
             });
         }
 
-        if self.consume("for") {
-            self.expect("(")?;
-            let init = self.opt_expr(";")?.map(Box::new);
-            let cond = self.opt_expr(";")?.map(Box::new);
-            let inc = self.opt_expr(")")?.map(Box::new);
+        if self.consume(Keyword::For) {
+            self.expect(Punct::LParen)?;
+            let init = self.opt_expr(Punct::Semi)?.map(Box::new);
+            let cond = self.opt_expr(Punct::Semi)?.map(Box::new);
+            let inc = self.opt_expr(Punct::RParen)?.map(Box::new);
             let body = Box::new(self.stmt()?);
             return Ok(Node::For {
                 init,
@@ -328,9 +330,9 @@ impl Parser {
             });
         }
 
-        if self.consume("{") {
+        if self.consume(Punct::LBrace) {
             let mut stmts = Vec::new();
-            while !self.consume("}") {
+            while !self.consume(Punct::RBrace) {
                 if self.at_eof() {
                     return error_at(self.peek().pos, "expected '}' before end of file");
                 }
@@ -340,11 +342,11 @@ impl Parser {
         }
 
         let node = self.expr()?;
-        self.expect(";")?;
+        self.expect(Punct::Semi)?;
         Ok(node)
     }
 
-    fn opt_expr(&mut self, end: &str) -> Result<Option<Node>> {
+    fn opt_expr(&mut self, end: Punct) -> Result<Option<Node>> {
         if self.consume(end) {
             return Ok(None);
         }
@@ -361,7 +363,7 @@ impl Parser {
         let pos = self.peek().pos;
         let node = self.equality()?;
 
-        if self.consume("=") {
+        if self.consume(Punct::Assign) {
             if !matches!(node, Node::Var { .. } | Node::GVar { .. } | Node::Deref(_)) {
                 return error_at(pos, "expression is not assignable");
             }
@@ -378,9 +380,9 @@ impl Parser {
         let mut node = self.relational()?;
 
         loop {
-            if self.consume("==") {
+            if self.consume(Punct::Eq) {
                 node = bin(BinOp::Eq, node, self.relational()?);
-            } else if self.consume("!=") {
+            } else if self.consume(Punct::Ne) {
                 node = bin(BinOp::Ne, node, self.relational()?);
             } else {
                 return Ok(node);
@@ -392,13 +394,13 @@ impl Parser {
         let mut node = self.add()?;
 
         loop {
-            if self.consume("<") {
+            if self.consume(Punct::Lt) {
                 node = bin(BinOp::Lt, node, self.add()?);
-            } else if self.consume("<=") {
+            } else if self.consume(Punct::Le) {
                 node = bin(BinOp::Le, node, self.add()?);
-            } else if self.consume(">") {
+            } else if self.consume(Punct::Gt) {
                 node = bin(BinOp::Lt, self.add()?, node);
-            } else if self.consume(">=") {
+            } else if self.consume(Punct::Ge) {
                 node = bin(BinOp::Le, self.add()?, node);
             } else {
                 return Ok(node);
@@ -411,10 +413,10 @@ impl Parser {
 
         loop {
             let pos = self.peek().pos;
-            if self.consume("+") {
+            if self.consume(Punct::Plus) {
                 let rhs = self.mul()?;
                 node = self.new_add(node, rhs, pos)?;
-            } else if self.consume("-") {
+            } else if self.consume(Punct::Minus) {
                 let rhs = self.mul()?;
                 node = self.new_sub(node, rhs, pos)?;
             } else {
@@ -467,9 +469,9 @@ impl Parser {
         let mut node = self.unary()?;
 
         loop {
-            if self.consume("*") {
+            if self.consume(Punct::Star) {
                 node = bin(BinOp::Mul, node, self.unary()?);
-            } else if self.consume("/") {
+            } else if self.consume(Punct::Slash) {
                 node = bin(BinOp::Div, node, self.unary()?);
             } else {
                 return Ok(node);
@@ -478,17 +480,17 @@ impl Parser {
     }
 
     fn unary(&mut self) -> Result<Node> {
-        if self.consume("sizeof") {
+        if self.consume(Keyword::Sizeof) {
             let node = self.unary()?;
             return Ok(Node::Num(type_of(&node).size()));
         }
-        if self.consume("+") {
+        if self.consume(Punct::Plus) {
             return self.unary();
         }
-        if self.consume("-") {
+        if self.consume(Punct::Minus) {
             return Ok(bin(BinOp::Sub, Node::Num(0), self.unary()?));
         }
-        if self.consume("*") {
+        if self.consume(Punct::Star) {
             let pos = self.peek().pos;
             let node = self.unary()?;
             if type_of(&node).base().is_none() {
@@ -496,7 +498,7 @@ impl Parser {
             }
             return Ok(Node::Deref(Box::new(node)));
         }
-        if self.consume("&") {
+        if self.consume(Punct::Amp) {
             let pos = self.peek().pos;
             let node = self.unary()?;
             if !matches!(node, Node::Var { .. } | Node::GVar { .. } | Node::Deref(_)) {
@@ -511,11 +513,11 @@ impl Parser {
         let mut node = self.primary()?;
         loop {
             let pos = self.peek().pos;
-            if !self.consume("[") {
+            if !self.consume(Punct::LBracket) {
                 return Ok(node);
             }
             let index = self.expr()?;
-            self.expect("]")?;
+            self.expect(Punct::RBracket)?;
             let addr = self.new_add(node, index, pos)?;
             if type_of(&addr).base().is_none() {
                 return error_at(pos, "subscripted value is not an array or pointer");
@@ -525,9 +527,9 @@ impl Parser {
     }
 
     fn primary(&mut self) -> Result<Node> {
-        if self.consume("(") {
+        if self.consume(Punct::LParen) {
             let node = self.expr()?;
-            self.expect(")")?;
+            self.expect(Punct::RParen)?;
             return Ok(node);
         }
 
@@ -548,11 +550,11 @@ impl Parser {
 
         let pos = self.peek().pos;
         if let Some(name) = self.consume_ident() {
-            if self.consume("(") {
+            if self.consume(Punct::LParen) {
                 let mut args = Vec::new();
-                while !self.consume(")") {
+                while !self.consume(Punct::RParen) {
                     if !args.is_empty() {
-                        self.expect(",")?;
+                        self.expect(Punct::Comma)?;
                     }
                     args.push(self.assign()?);
                 }
