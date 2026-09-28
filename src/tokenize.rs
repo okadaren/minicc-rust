@@ -2,77 +2,56 @@ use std::fmt;
 
 use crate::error::{Result, error_at};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Punct {
-    Plus,     // +
-    Minus,    // -
-    Star,     // *
-    Slash,    // /
-    Eq,       // ==
-    Ne,       // !=
-    Lt,       // <
-    Le,       // <=
-    Gt,       // >
-    Ge,       // >=
-    Assign,   // =
-    LParen,   // (
-    RParen,   // )
-    LBrace,   // {
-    RBrace,   // }
-    LBracket, // [
-    RBracket, // ]
-    Semi,     // ;
-    Comma,    // ,
-    Amp,      // &
+macro_rules! str_enum {
+    ($vis:vis enum $ty:ident { $($name:ident => $s:literal,)* }) => {
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        $vis enum $ty { $($name),* }
+
+        impl $ty {
+            $vis const ALL: &[$ty] = &[$($ty::$name),*];
+
+            $vis fn as_str(self) -> &'static str {
+                match self { $($ty::$name => $s),* }
+            }
+        }
+    };
 }
 
-impl Punct {
-    pub const ALL: [Punct; 20] = [
-        Punct::Eq,
-        Punct::Ne,
-        Punct::Le,
-        Punct::Ge,
-        Punct::Plus,
-        Punct::Minus,
-        Punct::Star,
-        Punct::Slash,
-        Punct::Lt,
-        Punct::Gt,
-        Punct::Assign,
-        Punct::LParen,
-        Punct::RParen,
-        Punct::LBrace,
-        Punct::RBrace,
-        Punct::LBracket,
-        Punct::RBracket,
-        Punct::Semi,
-        Punct::Comma,
-        Punct::Amp,
-    ];
+str_enum! {
+    pub enum Punct {
+        Eq => "==",
+        Ne => "!=",
+        Le => "<=",
+        Ge => ">=",
+        Plus => "+",
+        Minus => "-",
+        Star => "*",
+        Slash => "/",
+        Lt => "<",
+        Gt => ">",
+        Assign => "=",
+        LParen => "(",
+        RParen => ")",
+        LBrace => "{",
+        RBrace => "}",
+        LBracket => "[",
+        RBracket => "]",
+        Semi => ";",
+        Comma => ",",
+        Amp => "&",
+    }
+}
 
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Punct::Plus => "+",
-            Punct::Minus => "-",
-            Punct::Star => "*",
-            Punct::Slash => "/",
-            Punct::Eq => "==",
-            Punct::Ne => "!=",
-            Punct::Lt => "<",
-            Punct::Le => "<=",
-            Punct::Gt => ">",
-            Punct::Ge => ">=",
-            Punct::Assign => "=",
-            Punct::LParen => "(",
-            Punct::RParen => ")",
-            Punct::LBrace => "{",
-            Punct::RBrace => "}",
-            Punct::LBracket => "[",
-            Punct::RBracket => "]",
-            Punct::Semi => ";",
-            Punct::Comma => ",",
-            Punct::Amp => "&",
-        }
+str_enum! {
+    pub enum Keyword {
+        Return => "return",
+        If => "if",
+        Else => "else",
+        While => "while",
+        For => "for",
+        Int => "int",
+        Char => "char",
+        Sizeof => "sizeof",
     }
 }
 
@@ -82,45 +61,9 @@ impl fmt::Display for Punct {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Keyword {
-    Return,
-    If,
-    Else,
-    While,
-    For,
-    Int,
-    Char,
-    Sizeof,
-}
-
 impl Keyword {
-    pub const ALL: [Keyword; 8] = [
-        Keyword::Return,
-        Keyword::If,
-        Keyword::Else,
-        Keyword::While,
-        Keyword::For,
-        Keyword::Int,
-        Keyword::Char,
-        Keyword::Sizeof,
-    ];
-
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Keyword::Return => "return",
-            Keyword::If => "if",
-            Keyword::Else => "else",
-            Keyword::While => "while",
-            Keyword::For => "for",
-            Keyword::Int => "int",
-            Keyword::Char => "char",
-            Keyword::Sizeof => "sizeof",
-        }
-    }
-
     pub fn lookup(word: &str) -> Option<Keyword> {
-        Keyword::ALL.into_iter().find(|kw| kw.as_str() == word)
+        Keyword::ALL.iter().copied().find(|kw| kw.as_str() == word)
     }
 }
 
@@ -306,7 +249,7 @@ mod tests {
 
     #[test]
     fn every_punct_is_tokenized() {
-        for p in Punct::ALL {
+        for &p in Punct::ALL {
             let toks = tokenize(p.as_str()).unwrap();
             assert_eq!(toks[0].kind, TokenKind::Punct(p), "{}", p.as_str());
             assert_eq!(toks[1].kind, TokenKind::Eof, "{}", p.as_str());
