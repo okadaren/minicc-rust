@@ -1,5 +1,4 @@
-use std::process;
-use std::sync::OnceLock;
+use crate::error::{Result, error_at};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum TokenKind {
@@ -21,27 +20,6 @@ const KEYWORDS: [&str; 8] = [
     "return", "if", "else", "while", "for", "int", "sizeof", "char",
 ];
 
-pub static FILENAME: OnceLock<String> = OnceLock::new();
-
-pub fn error_at(src: &str, pos: usize, msg: &str) -> ! {
-    let line_start = src[..pos].rfind('\n').map_or(0, |i| i + 1);
-    let line_end = src[pos..].find('\n').map_or(src.len(), |i| pos + i);
-    let line_no = src[..pos].matches('\n').count() + 1;
-
-    let name = FILENAME.get().map(String::as_str).unwrap_or("-");
-    let prefix = format!("{}:{}: ", name, line_no);
-    eprintln!("{}{}", prefix, &src[line_start..line_end]);
-
-    let width = |s: &str| {
-        s.chars()
-            .map(|c| if c.is_ascii() { 1 } else { 2 })
-            .sum::<usize>()
-    };
-    let indent = width(&prefix) + width(&src[line_start..pos]);
-    eprintln!("{}^ {}", " ".repeat(indent), msg);
-    process::exit(1);
-}
-
 fn is_ident1(c: u8) -> bool {
     c.is_ascii_alphabetic() || c == b'_'
 }
@@ -50,7 +28,7 @@ fn is_ident2(c: u8) -> bool {
     is_ident1(c) || c.is_ascii_digit()
 }
 
-pub fn tokenize(src: &str) -> Vec<Token> {
+pub fn tokenize(src: &str) -> Result<Vec<Token>> {
     let s = src.as_bytes();
     let mut toks = Vec::new();
     let mut i = 0;
@@ -63,14 +41,14 @@ pub fn tokenize(src: &str) -> Vec<Token> {
             let mut bytes = Vec::new();
             loop {
                 if i >= s.len() {
-                    error_at(src, start, "string literal is not closed");
+                    return error_at(start, "unterminated string literal");
                 }
                 match s[i] {
                     b'"' => break,
                     b'\\' => {
                         i += 1;
                         if i >= s.len() {
-                            error_at(src, start, "string literal is not closed");
+                            return error_at(start, "unterminated string literal");
                         }
                         bytes.push(match s[i] {
                             b'n' => b'\n',
@@ -101,7 +79,7 @@ pub fn tokenize(src: &str) -> Vec<Token> {
         if src[i..].starts_with("/*") {
             match src[i + 2..].find("*/") {
                 Some(n) => i = i + 2 + n + 2,
-                None => error_at(src, i, "comment is not closed"),
+                None => return error_at(i, "unterminated comment"),
             }
             continue;
         }
@@ -152,11 +130,12 @@ pub fn tokenize(src: &str) -> Vec<Token> {
             i += 1;
             continue;
         }
-        error_at(src, i, "can't tokenize");
+        let c = src[i..].chars().next().unwrap();
+        return error_at(i, &format!("unexpected character '{}'", c));
     }
     toks.push(Token {
         kind: TokenKind::Eof,
         pos: i,
     });
-    toks
+    Ok(toks)
 }

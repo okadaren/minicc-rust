@@ -1,4 +1,5 @@
-use crate::tokenize::{Token, TokenKind, error_at, tokenize};
+use crate::error::{Result, error_at};
+use crate::tokenize::{Token, TokenKind, tokenize};
 use crate::types::{Type, type_of};
 
 #[derive(Debug, Clone, Copy)]
@@ -72,8 +73,7 @@ fn bin(op: BinOp, l: Node, r: Node) -> Node {
     Node::Binary(op, Box::new(l), Box::new(r))
 }
 
-pub struct Parser<'a> {
-    src: &'a str,
+pub struct Parser {
     toks: Vec<Token>,
     pos: usize,
     locals: Vec<LVar>,
@@ -82,17 +82,16 @@ pub struct Parser<'a> {
     str_count: usize,
 }
 
-impl<'a> Parser<'a> {
-    pub fn new(src: &'a str) -> Self {
-        Parser {
-            src,
-            toks: tokenize(src),
+impl Parser {
+    pub fn new(src: &str) -> Result<Self> {
+        Ok(Parser {
+            toks: tokenize(src)?,
             pos: 0,
             locals: Vec::new(),
             stack: 0,
             globals: Vec::new(),
             str_count: 0,
-        }
+        })
     }
 
     pub fn peek(&self) -> &Token {
@@ -110,20 +109,21 @@ impl<'a> Parser<'a> {
     }
 
     // 次が記号でなければエラー
-    fn expect(&mut self, op: &str) {
+    fn expect(&mut self, op: &str) -> Result<()> {
         if !self.consume(op) {
-            error_at(self.src, self.peek().pos, &format!("not '{}'", op));
+            return error_at(self.peek().pos, &format!("expected '{}'", op));
         }
+        Ok(())
     }
 
     // 次が整数なら読み進めてその値を返す。そうでなければエラー
-    fn expect_number(&mut self) -> i64 {
+    fn expect_number(&mut self) -> Result<i64> {
         match self.peek().kind {
             TokenKind::Num(n) => {
                 self.pos += 1;
-                n
+                Ok(n)
             }
-            _ => error_at(self.src, self.peek().pos, "not number"),
+            _ => error_at(self.peek().pos, "expected a number"),
         }
     }
 
@@ -137,37 +137,40 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn expect_ident(&mut self, what: &str) -> String {
+    fn expect_ident(&mut self, what: &str) -> Result<String> {
         let pos = self.peek().pos;
-        self.consume_ident()
-            .unwrap_or_else(|| error_at(self.src, pos, &format!("not {}", what)))
+        match self.consume_ident() {
+            Some(name) => Ok(name),
+            None => error_at(pos, &format!("expected {}", what)),
+        }
     }
 
     fn is_typename(&self) -> bool {
         matches!(&self.peek().kind, TokenKind::Keyword(k) if k == "int" || k == "char")
     }
 
-    fn parse_type(&mut self) -> Type {
+    fn parse_type(&mut self) -> Result<Type> {
         let mut ty = if self.consume("char") {
             Type::Char
-        } else {
-            self.expect("int");
+        } else if self.consume("int") {
             Type::Int
+        } else {
+            return error_at(self.peek().pos, "expected a type name");
         };
         while self.consume("*") {
             ty = Type::pointer_to(ty);
         }
-        ty
+        Ok(ty)
     }
 
-    fn declare_var(&mut self, name: String, ty: Type, pos: usize) -> i64 {
+    fn declare_var(&mut self, name: String, ty: Type, pos: usize) -> Result<i64> {
         if self.locals.iter().any(|v| v.name == name) {
-            error_at(self.src, pos, "same name variable is defined");
+            return error_at(pos, &format!("redefinition of '{}'", name));
         }
         self.stack = (self.stack + ty.size() + 7) / 8 * 8;
         let offset = self.stack;
         self.locals.push(LVar { name, offset, ty });
-        offset
+        Ok(offset)
     }
 
     fn find_var(&self, name: &str) -> Option<&LVar> {
@@ -178,353 +181,354 @@ impl<'a> Parser<'a> {
         self.peek().kind == TokenKind::Eof
     }
 
-    pub fn program(&mut self) -> Program {
+    pub fn program(&mut self) -> Result<Program> {
         let mut funcs = Vec::new();
         while !self.at_eof() {
-            if self.is_function() {
-                funcs.push(self.function());
+            if self.is_function()? {
+                funcs.push(self.function()?);
             } else {
-                self.global_var();
+                self.global_var()?;
             }
         }
         let globals = std::mem::take(&mut self.globals);
-        Program { funcs, globals }
+        Ok(Program { funcs, globals })
     }
 
-    fn is_function(&mut self) -> bool {
+    fn is_function(&mut self) -> Result<bool> {
         let start = self.pos;
-        self.parse_type();
-        self.expect_ident("name");
+        self.parse_type()?;
+        self.expect_ident("name")?;
         let result = matches!(&self.peek().kind, TokenKind::Punct(s) if s == "(");
         self.pos = start;
-        result
+        Ok(result)
     }
 
-    fn global_var(&mut self) {
-        let ty = self.parse_type();
+    fn global_var(&mut self) -> Result<()> {
+        let ty = self.parse_type()?;
         let pos = self.peek().pos;
-        let name = self.expect_ident("variable name");
-        let ty = self.array_suffix(ty);
-        self.expect(";");
+        let name = self.expect_ident("variable name")?;
+        let ty = self.array_suffix(ty)?;
+        self.expect(";")?;
         if self.globals.iter().any(|g| g.name == name) {
-            error_at(self.src, pos, "same name global variable defined");
+            return error_at(pos, &format!("redefinition of '{}'", name));
         }
         self.globals.push(GlobalVar {
             name,
             ty,
             init: None,
         });
+        Ok(())
     }
 
-    fn array_suffix(&mut self, ty: Type) -> Type {
+    fn array_suffix(&mut self, ty: Type) -> Result<Type> {
         if self.consume("[") {
-            let len = self.expect_number();
-            self.expect("]");
-            return Type::Array(Box::new(ty), len as usize);
+            let len = self.expect_number()?;
+            self.expect("]")?;
+            return Ok(Type::Array(Box::new(ty), len as usize));
         }
-        ty
+        Ok(ty)
     }
 
-    fn function(&mut self) -> Function {
+    fn function(&mut self) -> Result<Function> {
         self.locals.clear();
         self.stack = 0;
 
         let pos = self.peek().pos;
-        self.parse_type();
-        let name = self.expect_ident("function name");
+        self.parse_type()?;
+        let name = self.expect_ident("function name")?;
 
-        self.expect("(");
+        self.expect("(")?;
         let mut params = Vec::new();
         while !self.consume(")") {
             if !params.is_empty() {
-                self.expect(",");
+                self.expect(",")?;
             }
-            let ty = self.parse_type();
+            let ty = self.parse_type()?;
             let pos = self.peek().pos;
-            let param = self.expect_ident("argument name");
-            let offset = self.declare_var(param, ty.clone(), pos);
+            let param = self.expect_ident("argument name")?;
+            let offset = self.declare_var(param, ty.clone(), pos)?;
             params.push((offset, ty));
         }
         if params.len() > 6 {
-            error_at(self.src, pos, "arguments limit is 6");
+            return error_at(pos, "too many parameters (max 6)");
         }
 
-        self.expect("{");
+        self.expect("{")?;
         let mut body = Vec::new();
         while !self.consume("}") {
             if self.at_eof() {
-                error_at(self.src, self.peek().pos, "not '}'");
+                return error_at(self.peek().pos, "expected '}' before end of file");
             }
-            body.push(self.stmt());
+            body.push(self.stmt()?);
         }
 
         let stack_size = (self.stack + 15) / 16 * 16;
-        Function {
+        Ok(Function {
             name,
             params,
             body,
             stack_size,
-        }
+        })
     }
 
-    fn stmt(&mut self) -> Node {
+    fn stmt(&mut self) -> Result<Node> {
         if self.is_typename() {
-            let ty = self.parse_type();
+            let ty = self.parse_type()?;
             let pos = self.peek().pos;
-            let name = self.expect_ident("variable name");
-            let ty = self.array_suffix(ty);
-            self.declare_var(name, ty, pos);
-            self.expect(";");
-            return Node::Block(Vec::new());
+            let name = self.expect_ident("variable name")?;
+            let ty = self.array_suffix(ty)?;
+            self.declare_var(name, ty, pos)?;
+            self.expect(";")?;
+            return Ok(Node::Block(Vec::new()));
         }
 
         if self.consume("return") {
-            let node = self.expr();
-            self.expect(";");
-            return Node::Return(Box::new(node));
+            let node = self.expr()?;
+            self.expect(";")?;
+            return Ok(Node::Return(Box::new(node)));
         }
 
         if self.consume("if") {
-            self.expect("(");
-            let cond = Box::new(self.expr());
-            self.expect(")");
-            let then = Box::new(self.stmt());
+            self.expect("(")?;
+            let cond = Box::new(self.expr()?);
+            self.expect(")")?;
+            let then = Box::new(self.stmt()?);
             let els = if self.consume("else") {
-                Some(Box::new(self.stmt()))
+                Some(Box::new(self.stmt()?))
             } else {
                 None
             };
-            return Node::If { cond, then, els };
+            return Ok(Node::If { cond, then, els });
         }
 
         if self.consume("while") {
-            self.expect("(");
-            let cond = Some(Box::new(self.expr()));
-            self.expect(")");
-            let body = Box::new(self.stmt());
-            return Node::For {
+            self.expect("(")?;
+            let cond = Some(Box::new(self.expr()?));
+            self.expect(")")?;
+            let body = Box::new(self.stmt()?);
+            return Ok(Node::For {
                 init: None,
                 cond,
                 inc: None,
                 body,
-            };
+            });
         }
 
         if self.consume("for") {
-            self.expect("(");
-            let init = self.opt_expr(";").map(Box::new);
-            let cond = self.opt_expr(";").map(Box::new);
-            let inc = self.opt_expr(")").map(Box::new);
-            let body = Box::new(self.stmt());
-            return Node::For {
+            self.expect("(")?;
+            let init = self.opt_expr(";")?.map(Box::new);
+            let cond = self.opt_expr(";")?.map(Box::new);
+            let inc = self.opt_expr(")")?.map(Box::new);
+            let body = Box::new(self.stmt()?);
+            return Ok(Node::For {
                 init,
                 cond,
                 inc,
                 body,
-            };
+            });
         }
 
         if self.consume("{") {
             let mut stmts = Vec::new();
             while !self.consume("}") {
                 if self.at_eof() {
-                    error_at(self.src, self.peek().pos, "not '}'");
+                    return error_at(self.peek().pos, "expected '}' before end of file");
                 }
-                stmts.push(self.stmt());
+                stmts.push(self.stmt()?);
             }
-            return Node::Block(stmts);
+            return Ok(Node::Block(stmts));
         }
 
-        let node = self.expr();
-        self.expect(";");
-        node
+        let node = self.expr()?;
+        self.expect(";")?;
+        Ok(node)
     }
 
-    fn opt_expr(&mut self, end: &str) -> Option<Node> {
+    fn opt_expr(&mut self, end: &str) -> Result<Option<Node>> {
         if self.consume(end) {
-            return None;
+            return Ok(None);
         }
-        let node = self.expr();
-        self.expect(end);
-        Some(node)
+        let node = self.expr()?;
+        self.expect(end)?;
+        Ok(Some(node))
     }
 
-    fn expr(&mut self) -> Node {
+    fn expr(&mut self) -> Result<Node> {
         self.assign()
     }
 
-    fn assign(&mut self) -> Node {
+    fn assign(&mut self) -> Result<Node> {
         let pos = self.peek().pos;
-        let node = self.equality();
+        let node = self.equality()?;
 
         if self.consume("=") {
             if !matches!(node, Node::Var { .. } | Node::GVar { .. } | Node::Deref(_)) {
-                error_at(self.src, pos, "the lhs must be a variable or a * expr");
+                return error_at(pos, "expression is not assignable");
             }
 
             if matches!(type_of(&node), Type::Array(..)) {
-                error_at(self.src, pos, "can't assign to array");
+                return error_at(pos, "array type is not assignable");
             }
-            return Node::Assign(Box::new(node), Box::new(self.assign()));
+            return Ok(Node::Assign(Box::new(node), Box::new(self.assign()?)));
         }
-        node
+        Ok(node)
     }
 
-    fn equality(&mut self) -> Node {
-        let mut node = self.relational();
+    fn equality(&mut self) -> Result<Node> {
+        let mut node = self.relational()?;
 
         loop {
             if self.consume("==") {
-                node = bin(BinOp::Eq, node, self.relational());
+                node = bin(BinOp::Eq, node, self.relational()?);
             } else if self.consume("!=") {
-                node = bin(BinOp::Ne, node, self.relational());
+                node = bin(BinOp::Ne, node, self.relational()?);
             } else {
-                return node;
+                return Ok(node);
             }
         }
     }
 
-    fn relational(&mut self) -> Node {
-        let mut node = self.add();
+    fn relational(&mut self) -> Result<Node> {
+        let mut node = self.add()?;
 
         loop {
             if self.consume("<") {
-                node = bin(BinOp::Lt, node, self.add());
+                node = bin(BinOp::Lt, node, self.add()?);
             } else if self.consume("<=") {
-                node = bin(BinOp::Le, node, self.add());
+                node = bin(BinOp::Le, node, self.add()?);
             } else if self.consume(">") {
-                node = bin(BinOp::Lt, self.add(), node);
+                node = bin(BinOp::Lt, self.add()?, node);
             } else if self.consume(">=") {
-                node = bin(BinOp::Le, self.add(), node);
+                node = bin(BinOp::Le, self.add()?, node);
             } else {
-                return node;
+                return Ok(node);
             }
         }
     }
 
-    fn add(&mut self) -> Node {
-        let mut node = self.mul();
+    fn add(&mut self) -> Result<Node> {
+        let mut node = self.mul()?;
 
         loop {
             let pos = self.peek().pos;
             if self.consume("+") {
-                let rhs = self.mul();
-                node = self.new_add(node, rhs, pos);
+                let rhs = self.mul()?;
+                node = self.new_add(node, rhs, pos)?;
             } else if self.consume("-") {
-                let rhs = self.mul();
-                node = self.new_sub(node, rhs, pos);
+                let rhs = self.mul()?;
+                node = self.new_sub(node, rhs, pos)?;
             } else {
-                return node;
+                return Ok(node);
             }
         }
     }
 
-    fn new_add(&self, lhs: Node, rhs: Node, pos: usize) -> Node {
+    fn new_add(&self, lhs: Node, rhs: Node, pos: usize) -> Result<Node> {
         let lbase = type_of(&lhs).base().cloned();
         let rbase = type_of(&rhs).base().cloned();
         match (lbase, rbase) {
             // 整数 + 整数
-            (None, None) => bin(BinOp::Add, lhs, rhs),
+            (None, None) => Ok(bin(BinOp::Add, lhs, rhs)),
             // ポインタ + 整数
             (Some(base), None) => {
                 let scaled = bin(BinOp::Mul, rhs, Node::Num(base.size()));
-                bin(BinOp::Add, lhs, scaled)
+                Ok(bin(BinOp::Add, lhs, scaled))
             }
             // 整数 + ポインタ
             (None, Some(base)) => {
                 let scaled = bin(BinOp::Mul, lhs, Node::Num(base.size()));
-                bin(BinOp::Add, rhs, scaled)
+                Ok(bin(BinOp::Add, rhs, scaled))
             }
-            (Some(_), Some(_)) => error_at(self.src, pos, "can't add two pointers"),
+            (Some(_), Some(_)) => error_at(pos, "invalid operands to '+' (pointer + pointer)"),
         }
     }
 
-    fn new_sub(&self, lhs: Node, rhs: Node, pos: usize) -> Node {
+    fn new_sub(&self, lhs: Node, rhs: Node, pos: usize) -> Result<Node> {
         let lbase = type_of(&lhs).base().cloned();
         let rbase = type_of(&rhs).base().cloned();
         match (lbase, rbase) {
             // 整数 - 整数
-            (None, None) => bin(BinOp::Sub, lhs, rhs),
+            (None, None) => Ok(bin(BinOp::Sub, lhs, rhs)),
             // ポインタ - 整数
             (Some(base), None) => {
                 let scaled = bin(BinOp::Mul, rhs, Node::Num(base.size()));
-                bin(BinOp::Sub, lhs, scaled)
+                Ok(bin(BinOp::Sub, lhs, scaled))
             }
             // ポインタ - ポインタ
             (Some(base), Some(_)) => {
                 let diff = bin(BinOp::Sub, lhs, rhs);
-                bin(BinOp::Div, diff, Node::Num(base.size()))
+                Ok(bin(BinOp::Div, diff, Node::Num(base.size())))
             }
-            (None, Some(_)) => error_at(self.src, pos, "can't sub pointer from int"),
+            (None, Some(_)) => error_at(pos, "invalid operands to '-' (integer - pointer)"),
         }
     }
 
-    fn mul(&mut self) -> Node {
-        let mut node = self.unary();
+    fn mul(&mut self) -> Result<Node> {
+        let mut node = self.unary()?;
 
         loop {
             if self.consume("*") {
-                node = bin(BinOp::Mul, node, self.unary());
+                node = bin(BinOp::Mul, node, self.unary()?);
             } else if self.consume("/") {
-                node = bin(BinOp::Div, node, self.unary());
+                node = bin(BinOp::Div, node, self.unary()?);
             } else {
-                return node;
+                return Ok(node);
             }
         }
     }
 
-    fn unary(&mut self) -> Node {
+    fn unary(&mut self) -> Result<Node> {
         if self.consume("sizeof") {
-            let node = self.unary();
-            return Node::Num(type_of(&node).size());
+            let node = self.unary()?;
+            return Ok(Node::Num(type_of(&node).size()));
         }
         if self.consume("+") {
             return self.unary();
         }
         if self.consume("-") {
-            return bin(BinOp::Sub, Node::Num(0), self.unary());
+            return Ok(bin(BinOp::Sub, Node::Num(0), self.unary()?));
         }
         if self.consume("*") {
             let pos = self.peek().pos;
-            let node = self.unary();
+            let node = self.unary()?;
             if type_of(&node).base().is_none() {
-                error_at(self.src, pos, "can't deref because this is not pointer")
+                return error_at(pos, "cannot dereference a non-pointer value");
             }
-            return Node::Deref(Box::new(node));
+            return Ok(Node::Deref(Box::new(node)));
         }
         if self.consume("&") {
             let pos = self.peek().pos;
-            let node = self.unary();
+            let node = self.unary()?;
             if !matches!(node, Node::Var { .. } | Node::GVar { .. } | Node::Deref(_)) {
-                error_at(self.src, pos, "can't take the address of this")
+                return error_at(pos, "cannot take the address of this expression");
             }
-            return Node::Addr(Box::new(node));
+            return Ok(Node::Addr(Box::new(node)));
         }
         self.postfix()
     }
 
-    fn postfix(&mut self) -> Node {
-        let mut node = self.primary();
+    fn postfix(&mut self) -> Result<Node> {
+        let mut node = self.primary()?;
         loop {
             let pos = self.peek().pos;
             if !self.consume("[") {
-                return node;
+                return Ok(node);
             }
-            let index = self.expr();
-            self.expect("]");
-            let addr = self.new_add(node, index, pos);
+            let index = self.expr()?;
+            self.expect("]")?;
+            let addr = self.new_add(node, index, pos)?;
             if type_of(&addr).base().is_none() {
-                error_at(self.src, pos, "this is not pointer or array, can't deref");
+                return error_at(pos, "subscripted value is not an array or pointer");
             }
             node = Node::Deref(Box::new(addr))
         }
     }
 
-    fn primary(&mut self) -> Node {
+    fn primary(&mut self) -> Result<Node> {
         if self.consume("(") {
-            let node = self.expr();
-            self.expect(")");
-            return node;
+            let node = self.expr()?;
+            self.expect(")")?;
+            return Ok(node);
         }
 
         if let TokenKind::Str(bytes) = &self.peek().kind {
@@ -539,7 +543,7 @@ impl<'a> Parser<'a> {
                 ty: ty.clone(),
                 init: Some(bytes),
             });
-            return Node::GVar { name, ty };
+            return Ok(Node::GVar { name, ty });
         }
 
         let pos = self.peek().pos;
@@ -548,29 +552,29 @@ impl<'a> Parser<'a> {
                 let mut args = Vec::new();
                 while !self.consume(")") {
                     if !args.is_empty() {
-                        self.expect(",");
+                        self.expect(",")?;
                     }
-                    args.push(self.assign());
+                    args.push(self.assign()?);
                 }
                 if args.len() > 6 {
-                    error_at(self.src, self.peek().pos, "arguments limit is 6")
+                    return error_at(pos, "too many arguments (max 6)");
                 }
-                return Node::Call(name, args);
+                return Ok(Node::Call(name, args));
             }
             if let Some(var) = self.find_var(&name) {
-                return Node::Var {
+                return Ok(Node::Var {
                     offset: var.offset,
                     ty: var.ty.clone(),
-                };
+                });
             }
             if let Some(g) = self.globals.iter().find(|g| g.name == name) {
-                return Node::GVar {
+                return Ok(Node::GVar {
                     name,
                     ty: g.ty.clone(),
-                };
+                });
             }
-            error_at(self.src, pos, "not defined variable");
+            return error_at(pos, &format!("undefined variable '{}'", name));
         }
-        Node::Num(self.expect_number())
+        Ok(Node::Num(self.expect_number()?))
     }
 }
