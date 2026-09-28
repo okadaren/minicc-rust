@@ -32,7 +32,7 @@ impl Codegen {
     fn gen_addr(&mut self, node: &Node) {
         match node {
             Node::Var { offset, .. } => println!("  lea rax, [rbp-{}]", offset),
-            Node::GVar { name, .. } => println!("   lea rax, [rip+{}]", name),
+            Node::GVar { name, .. } => println!("  lea rax, [rip+{}]", name),
             Node::Deref(e) => self.gen_expr(e),
             _ => unreachable!(),
         }
@@ -50,7 +50,7 @@ impl Codegen {
     fn store(&mut self, ty: &Type) {
         self.pop("rdi");
         match ty.size() {
-            1 => println!(" mov [rdi], al"),
+            1 => println!("  mov [rdi], al"),
             4 => println!("  mov [rdi], eax"),
             _ => println!("  mov [rdi], rax"),
         }
@@ -102,8 +102,8 @@ impl Codegen {
                     BinOp::Sub => println!("  sub rax, rdi"),
                     BinOp::Mul => println!("  imul rax, rdi"),
                     BinOp::Div => {
-                        println!("  cqo\n");
-                        println!("  idiv rdi\n");
+                        println!("  cqo");
+                        println!("  idiv rdi");
                     }
                     BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le => {
                         let set = match op {
