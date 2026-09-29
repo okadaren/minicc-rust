@@ -1,5 +1,5 @@
 use crate::{
-    parse::{BinOp, Function, Node, Program},
+    parse::{BinOp, Function, Node, Param, Program},
     types::{Type, type_of},
 };
 
@@ -7,6 +7,7 @@ const ARG_REGS: [&str; 6] = ["rdi", "rsi", "rdx", "rcx", "r8", "r9"];
 const ARG_REGS32: [&str; 6] = ["edi", "esi", "edx", "ecx", "r8d", "r9d"];
 const ARG_REGS8: [&str; 6] = ["dil", "sil", "dl", "cl", "r8b", "r9b"];
 
+#[derive(Default)]
 struct Codegen {
     label: usize, // ラベルの通し番号
     depth: usize, // push してまだ pop していない数
@@ -32,7 +33,7 @@ impl Codegen {
     fn gen_addr(&mut self, node: &Node) {
         match node {
             Node::Var { offset, .. } => println!("  lea rax, [rbp-{}]", offset),
-            Node::GVar { name, .. } => println!("   lea rax, [rip+{}]", name),
+            Node::GVar { name, .. } => println!("  lea rax, [rip+{}]", name),
             Node::Deref(e) => self.gen_expr(e),
             _ => unreachable!(),
         }
@@ -50,7 +51,7 @@ impl Codegen {
     fn store(&mut self, ty: &Type) {
         self.pop("rdi");
         match ty.size() {
-            1 => println!(" mov [rdi], al"),
+            1 => println!("  mov [rdi], al"),
             4 => println!("  mov [rdi], eax"),
             _ => println!("  mov [rdi], rax"),
         }
@@ -102,8 +103,8 @@ impl Codegen {
                     BinOp::Sub => println!("  sub rax, rdi"),
                     BinOp::Mul => println!("  imul rax, rdi"),
                     BinOp::Div => {
-                        println!("  cqo\n");
-                        println!("  idiv rdi\n");
+                        println!("  cqo");
+                        println!("  idiv rdi");
                     }
                     BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le => {
                         let set = match op {
@@ -183,7 +184,7 @@ impl Codegen {
         println!("  mov rbp, rsp");
         println!("  sub rsp, {}", f.stack_size);
 
-        for (i, (offset, ty)) in f.params.iter().enumerate() {
+        for (i, Param { offset, ty }) in f.params.iter().enumerate() {
             let reg = match ty.size() {
                 1 => ARG_REGS8[i],
                 4 => ARG_REGS32[i],
@@ -205,11 +206,7 @@ impl Codegen {
 }
 
 pub fn gen_program(prog: &Program) {
-    let mut cg = Codegen {
-        label: 0,
-        depth: 0,
-        func: String::new(),
-    };
+    let mut cg = Codegen::default();
 
     println!(".intel_syntax noprefix");
 

@@ -51,9 +51,14 @@ struct LVar {
     ty: Type,
 }
 
+pub struct Param {
+    pub offset: i64,
+    pub ty: Type,
+}
+
 pub struct Function {
     pub name: String,
-    pub params: Vec<(i64, Type)>,
+    pub params: Vec<Param>,
     pub body: Vec<Node>,
     pub stack_size: i64,
 }
@@ -82,6 +87,46 @@ pub struct Parser {
     str_count: usize,
 }
 
+fn new_add(lhs: Node, rhs: Node, pos: usize) -> Result<Node> {
+    let lbase = type_of(&lhs).base().cloned();
+    let rbase = type_of(&rhs).base().cloned();
+    match (lbase, rbase) {
+        // 整数 + 整数
+        (None, None) => Ok(bin(BinOp::Add, lhs, rhs)),
+        // ポインタ + 整数
+        (Some(base), None) => {
+            let scaled = bin(BinOp::Mul, rhs, Node::Num(base.size()));
+            Ok(bin(BinOp::Add, lhs, scaled))
+        }
+        // 整数 + ポインタ
+        (None, Some(base)) => {
+            let scaled = bin(BinOp::Mul, lhs, Node::Num(base.size()));
+            Ok(bin(BinOp::Add, rhs, scaled))
+        }
+        (Some(_), Some(_)) => error_at(pos, "invalid operands to '+' (pointer + pointer)"),
+    }
+}
+
+fn new_sub(lhs: Node, rhs: Node, pos: usize) -> Result<Node> {
+    let lbase = type_of(&lhs).base().cloned();
+    let rbase = type_of(&rhs).base().cloned();
+    match (lbase, rbase) {
+        // 整数 - 整数
+        (None, None) => Ok(bin(BinOp::Sub, lhs, rhs)),
+        // ポインタ - 整数
+        (Some(base), None) => {
+            let scaled = bin(BinOp::Mul, rhs, Node::Num(base.size()));
+            Ok(bin(BinOp::Sub, lhs, scaled))
+        }
+        // ポインタ - ポインタ
+        (Some(base), Some(_)) => {
+            let diff = bin(BinOp::Sub, lhs, rhs);
+            Ok(bin(BinOp::Div, diff, Node::Num(base.size())))
+        }
+        (None, Some(_)) => error_at(pos, "invalid operands to '-' (integer - pointer)"),
+    }
+}
+
 impl Parser {
     pub fn new(src: &str) -> Result<Self> {
         Ok(Parser {
@@ -94,7 +139,7 @@ impl Parser {
         })
     }
 
-    pub fn peek(&self) -> &Token {
+    fn peek(&self) -> &Token {
         &self.toks[self.pos]
     }
 
@@ -111,7 +156,7 @@ impl Parser {
     // 次が記号でなければエラー
     fn expect(&mut self, op: Punct) -> Result<()> {
         if !self.consume(op) {
-            return error_at(self.peek().pos, &format!("expected '{}'", op));
+            return error_at(self.peek().pos, format!("expected '{}'", op));
         }
         Ok(())
     }
@@ -141,7 +186,7 @@ impl Parser {
         let pos = self.peek().pos;
         match self.consume_ident() {
             Some(name) => Ok(name),
-            None => error_at(pos, &format!("expected {}", what)),
+            None => error_at(pos, format!("expected {}", what)),
         }
     }
 
@@ -167,7 +212,7 @@ impl Parser {
 
     fn declare_var(&mut self, name: String, ty: Type, pos: usize) -> Result<i64> {
         if self.locals.iter().any(|v| v.name == name) {
-            return error_at(pos, &format!("redefinition of '{}'", name));
+            return error_at(pos, format!("redefinition of '{}'", name));
         }
         self.stack = (self.stack + ty.size() + 7) / 8 * 8;
         let offset = self.stack;
@@ -212,7 +257,7 @@ impl Parser {
         let ty = self.array_suffix(ty)?;
         self.expect(Punct::Semi)?;
         if self.globals.iter().any(|g| g.name == name) {
-            return error_at(pos, &format!("redefinition of '{}'", name));
+            return error_at(pos, format!("redefinition of '{}'", name));
         }
         self.globals.push(GlobalVar {
             name,
@@ -249,7 +294,7 @@ impl Parser {
             let pos = self.peek().pos;
             let param = self.expect_ident("argument name")?;
             let offset = self.declare_var(param, ty.clone(), pos)?;
-            params.push((offset, ty));
+            params.push(Param { offset, ty });
         }
         if params.len() > 6 {
             return error_at(pos, "too many parameters (max 6)");
@@ -415,53 +460,13 @@ impl Parser {
             let pos = self.peek().pos;
             if self.consume(Punct::Plus) {
                 let rhs = self.mul()?;
-                node = self.new_add(node, rhs, pos)?;
+                node = new_add(node, rhs, pos)?;
             } else if self.consume(Punct::Minus) {
                 let rhs = self.mul()?;
-                node = self.new_sub(node, rhs, pos)?;
+                node = new_sub(node, rhs, pos)?;
             } else {
                 return Ok(node);
             }
-        }
-    }
-
-    fn new_add(&self, lhs: Node, rhs: Node, pos: usize) -> Result<Node> {
-        let lbase = type_of(&lhs).base().cloned();
-        let rbase = type_of(&rhs).base().cloned();
-        match (lbase, rbase) {
-            // 整数 + 整数
-            (None, None) => Ok(bin(BinOp::Add, lhs, rhs)),
-            // ポインタ + 整数
-            (Some(base), None) => {
-                let scaled = bin(BinOp::Mul, rhs, Node::Num(base.size()));
-                Ok(bin(BinOp::Add, lhs, scaled))
-            }
-            // 整数 + ポインタ
-            (None, Some(base)) => {
-                let scaled = bin(BinOp::Mul, lhs, Node::Num(base.size()));
-                Ok(bin(BinOp::Add, rhs, scaled))
-            }
-            (Some(_), Some(_)) => error_at(pos, "invalid operands to '+' (pointer + pointer)"),
-        }
-    }
-
-    fn new_sub(&self, lhs: Node, rhs: Node, pos: usize) -> Result<Node> {
-        let lbase = type_of(&lhs).base().cloned();
-        let rbase = type_of(&rhs).base().cloned();
-        match (lbase, rbase) {
-            // 整数 - 整数
-            (None, None) => Ok(bin(BinOp::Sub, lhs, rhs)),
-            // ポインタ - 整数
-            (Some(base), None) => {
-                let scaled = bin(BinOp::Mul, rhs, Node::Num(base.size()));
-                Ok(bin(BinOp::Sub, lhs, scaled))
-            }
-            // ポインタ - ポインタ
-            (Some(base), Some(_)) => {
-                let diff = bin(BinOp::Sub, lhs, rhs);
-                Ok(bin(BinOp::Div, diff, Node::Num(base.size())))
-            }
-            (None, Some(_)) => error_at(pos, "invalid operands to '-' (integer - pointer)"),
         }
     }
 
@@ -518,7 +523,7 @@ impl Parser {
             }
             let index = self.expr()?;
             self.expect(Punct::RBracket)?;
-            let addr = self.new_add(node, index, pos)?;
+            let addr = new_add(node, index, pos)?;
             if type_of(&addr).base().is_none() {
                 return error_at(pos, "subscripted value is not an array or pointer");
             }
@@ -575,7 +580,7 @@ impl Parser {
                     ty: g.ty.clone(),
                 });
             }
-            return error_at(pos, &format!("undefined variable '{}'", name));
+            return error_at(pos, format!("undefined variable '{}'", name));
         }
         Ok(Node::Num(self.expect_number()?))
     }

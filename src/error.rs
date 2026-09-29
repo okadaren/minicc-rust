@@ -1,3 +1,5 @@
+use std::fmt;
+
 #[must_use]
 #[derive(Debug, Clone)]
 pub struct CompileError {
@@ -25,9 +27,17 @@ impl CompileError {
     }
 }
 
+impl fmt::Display for CompileError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.msg)
+    }
+}
+
+impl std::error::Error for CompileError {}
+
 pub type Result<T> = std::result::Result<T, CompileError>;
 
-pub fn error_at<T>(pos: usize, msg: &str) -> Result<T> {
+pub fn error_at<T>(pos: usize, msg: impl Into<String>) -> Result<T> {
     Err(CompileError {
         pos,
         msg: msg.into(),
