@@ -1,5 +1,5 @@
 use crate::{
-    parse::{BinOp, Function, Node, Param, Program},
+    parse::{BinOp, Expr, Function, Param, Program, Stmt},
     types::{Type, type_of},
 };
 
@@ -30,11 +30,11 @@ impl Codegen {
         self.label
     }
 
-    fn gen_addr(&mut self, node: &Node) {
+    fn gen_addr(&mut self, node: &Expr) {
         match node {
-            Node::Var { offset, .. } => println!("  lea rax, [rbp-{}]", offset),
-            Node::GVar { name, .. } => println!("  lea rax, [rip+{}]", name),
-            Node::Deref(e) => self.gen_expr(e),
+            Expr::Var { offset, .. } => println!("  lea rax, [rbp-{}]", offset),
+            Expr::GVar { name, .. } => println!("  lea rax, [rip+{}]", name),
+            Expr::Deref(e) => self.gen_expr(e),
             _ => unreachable!(),
         }
     }
@@ -57,25 +57,25 @@ impl Codegen {
         }
     }
 
-    fn gen_expr(&mut self, node: &Node) {
+    fn gen_expr(&mut self, node: &Expr) {
         match node {
-            Node::Num(n) => println!("  mov rax, {}", n),
-            Node::Var { ty, .. } | Node::GVar { ty, .. } => {
+            Expr::Num(n) => println!("  mov rax, {}", n),
+            Expr::Var { ty, .. } | Expr::GVar { ty, .. } => {
                 self.gen_addr(node);
                 self.load(ty);
             }
-            Node::Addr(e) => self.gen_addr(e),
-            Node::Deref(e) => {
+            Expr::Addr(e) => self.gen_addr(e),
+            Expr::Deref(e) => {
                 self.gen_expr(e);
                 self.load(&type_of(node));
             }
-            Node::Assign(lhs, rhs) => {
+            Expr::Assign(lhs, rhs) => {
                 self.gen_addr(lhs);
                 self.push();
                 self.gen_expr(rhs);
                 self.store(&type_of(lhs));
             }
-            Node::Call(name, args) => {
+            Expr::Call(name, args) => {
                 for arg in args {
                     self.gen_expr(arg);
                     self.push();
@@ -93,7 +93,7 @@ impl Codegen {
                 }
                 println!("  movsxd rax, eax");
             }
-            Node::Binary(op, lhs, rhs) => {
+            Expr::Binary(op, lhs, rhs) => {
                 self.gen_expr(rhs);
                 self.push();
                 self.gen_expr(lhs);
@@ -119,17 +119,16 @@ impl Codegen {
                     }
                 }
             }
-            Node::Return(_) | Node::If { .. } | Node::For { .. } | Node::Block(_) => unreachable!(),
         };
     }
 
-    fn gen_stmt(&mut self, node: &Node) {
-        match node {
-            Node::Return(e) => {
+    fn gen_stmt(&mut self, stmt: &Stmt) {
+        match stmt {
+            Stmt::Return(e) => {
                 self.gen_expr(e);
                 println!("  jmp .L.return.{}", self.func);
             }
-            Node::If { cond, then, els } => {
+            Stmt::If { cond, then, els } => {
                 let c = self.new_label();
                 self.gen_expr(cond);
                 println!("  cmp rax, 0");
@@ -142,7 +141,7 @@ impl Codegen {
                 }
                 println!(".L.end.{}:", c);
             }
-            Node::For {
+            Stmt::For {
                 init,
                 cond,
                 inc,
@@ -165,12 +164,12 @@ impl Codegen {
                 println!("  jmp .L.begin.{}", c);
                 println!(".L.end.{}:", c);
             }
-            Node::Block(stmts) => {
+            Stmt::Block(stmts) => {
                 for s in stmts {
                     self.gen_stmt(s);
                 }
             }
-            _ => self.gen_expr(node),
+            Stmt::Expr(e) => self.gen_expr(e),
         }
     }
 
