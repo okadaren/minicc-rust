@@ -1,5 +1,3 @@
-use crate::parse::Expr;
-
 #[derive(Debug, Clone, PartialEq)]
 pub enum Type {
     Char,
@@ -28,8 +26,4 @@ impl Type {
             Type::Char | Type::Int => None,
         }
     }
-}
-
-pub fn type_of(node: &Expr) -> Type {
-    node.ty.clone()
 }

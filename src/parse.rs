@@ -1,6 +1,6 @@
 use crate::error::{Result, error_at};
 use crate::tokenize::{Keyword, Punct, Token, TokenKind, tokenize};
-use crate::types::{Type, type_of};
+use crate::types::Type;
 
 #[derive(Debug, Clone, Copy)]
 pub enum BinOp {
@@ -157,19 +157,19 @@ pub struct Parser {
 }
 
 fn new_add(lhs: Expr, rhs: Expr, pos: usize) -> Result<Expr> {
-    let lbase = type_of(&lhs).base().cloned();
-    let rbase = type_of(&rhs).base().cloned();
-    match (lbase, rbase) {
+    let lsize = lhs.ty.base().map(Type::size);
+    let rsize = rhs.ty.base().map(Type::size);
+    match (lsize, rsize) {
         // 整数 + 整数
         (None, None) => Ok(Expr::binary(BinOp::Add, lhs, rhs)),
         // ポインタ + 整数
-        (Some(base), None) => {
-            let scaled = Expr::binary(BinOp::Mul, rhs, Expr::num(base.size()));
+        (Some(size), None) => {
+            let scaled = Expr::binary(BinOp::Mul, rhs, Expr::num(size));
             Ok(Expr::binary(BinOp::Add, lhs, scaled))
         }
         // 整数 + ポインタ
-        (None, Some(base)) => {
-            let scaled = Expr::binary(BinOp::Mul, lhs, Expr::num(base.size()));
+        (None, Some(size)) => {
+            let scaled = Expr::binary(BinOp::Mul, lhs, Expr::num(size));
             Ok(Expr::binary(BinOp::Add, rhs, scaled))
         }
         (Some(_), Some(_)) => error_at(pos, "invalid operands to '+' (pointer + pointer)"),
@@ -177,20 +177,20 @@ fn new_add(lhs: Expr, rhs: Expr, pos: usize) -> Result<Expr> {
 }
 
 fn new_sub(lhs: Expr, rhs: Expr, pos: usize) -> Result<Expr> {
-    let lbase = type_of(&lhs).base().cloned();
-    let rbase = type_of(&rhs).base().cloned();
-    match (lbase, rbase) {
+    let lsize = lhs.ty.base().map(Type::size);
+    let rsize = rhs.ty.base().map(Type::size);
+    match (lsize, rsize) {
         // 整数 - 整数
         (None, None) => Ok(Expr::binary(BinOp::Sub, lhs, rhs)),
         // ポインタ - 整数
-        (Some(base), None) => {
-            let scaled = Expr::binary(BinOp::Mul, rhs, Expr::num(base.size()));
+        (Some(size), None) => {
+            let scaled = Expr::binary(BinOp::Mul, rhs, Expr::num(size));
             Ok(Expr::binary(BinOp::Sub, lhs, scaled))
         }
         // ポインタ - ポインタ
-        (Some(base), Some(_)) => {
+        (Some(size), Some(_)) => {
             let diff = Expr::binary(BinOp::Sub, lhs, rhs);
-            Ok(Expr::binary(BinOp::Div, diff, Expr::num(base.size())))
+            Ok(Expr::binary(BinOp::Div, diff, Expr::num(size)))
         }
         (None, Some(_)) => error_at(pos, "invalid operands to '-' (integer - pointer)"),
     }
@@ -491,7 +491,7 @@ impl Parser {
                 return error_at(pos, "expression is not assignable");
             }
 
-            if matches!(type_of(&node), Type::Array(..)) {
+            if matches!(node.ty, Type::Array(..)) {
                 return error_at(pos, "array type is not assignable");
             }
             return Ok(Expr::assign(node, self.assign()?));
@@ -565,7 +565,7 @@ impl Parser {
     fn unary(&mut self) -> Result<Expr> {
         if self.consume(Keyword::Sizeof) {
             let node = self.unary()?;
-            return Ok(Expr::num(type_of(&node).size()));
+            return Ok(Expr::num(node.ty.size()));
         }
         if self.consume(Punct::Plus) {
             return self.unary();

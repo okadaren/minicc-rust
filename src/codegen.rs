@@ -1,6 +1,6 @@
 use crate::{
     parse::{BinOp, Expr, ExprKind, Function, Param, Program, Stmt},
-    types::{Type, type_of},
+    types::Type,
 };
 
 const ARG_REGS: [&str; 6] = ["rdi", "rsi", "rdx", "rcx", "r8", "r9"];
@@ -67,13 +67,13 @@ impl Codegen {
             ExprKind::Addr(e) => self.gen_addr(e),
             ExprKind::Deref(e) => {
                 self.gen_expr(e);
-                self.load(&type_of(node));
+                self.load(&node.ty);
             }
             ExprKind::Assign(lhs, rhs) => {
                 self.gen_addr(lhs);
                 self.push();
                 self.gen_expr(rhs);
-                self.store(&type_of(lhs));
+                self.store(&lhs.ty);
             }
             ExprKind::Call(name, args) => {
                 for arg in args {
