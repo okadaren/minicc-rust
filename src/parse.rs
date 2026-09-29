@@ -301,13 +301,7 @@ impl Parser {
         }
 
         self.expect(Punct::LBrace)?;
-        let mut body = Vec::new();
-        while !self.consume(Punct::RBrace) {
-            if self.at_eof() {
-                return error_at(self.peek().pos, "expected '}' before end of file");
-            }
-            body.push(self.stmt()?);
-        }
+        let body = self.compound_stmt()?;
 
         let stack_size = (self.stack + 15) / 16 * 16;
         Ok(Function {
@@ -318,15 +312,34 @@ impl Parser {
         })
     }
 
+    fn declaration(&mut self) -> Result<()> {
+        let ty = self.parse_type()?;
+        let pos = self.peek().pos;
+        let name = self.expect_ident("variable name")?;
+        let ty = self.array_suffix(ty)?;
+        self.declare_var(name, ty, pos)?;
+        self.expect(Punct::Semi)?;
+        Ok(())
+    }
+
+    fn compound_stmt(&mut self) -> Result<Vec<Node>> {
+        let mut stmts = Vec::new();
+        while !self.consume(Punct::RBrace) {
+            if self.at_eof() {
+                return error_at(self.peek().pos, "expected '}' before end of file");
+            }
+            if self.is_typename() {
+                self.declaration()?;
+            } else {
+                stmts.push(self.stmt()?);
+            }
+        }
+        Ok(stmts)
+    }
+
     fn stmt(&mut self) -> Result<Node> {
         if self.is_typename() {
-            let ty = self.parse_type()?;
-            let pos = self.peek().pos;
-            let name = self.expect_ident("variable name")?;
-            let ty = self.array_suffix(ty)?;
-            self.declare_var(name, ty, pos)?;
-            self.expect(Punct::Semi)?;
-            return Ok(Node::Block(Vec::new()));
+            return error_at(self.peek().pos, "declaration is not allowed here");
         }
 
         if self.consume(Keyword::Return) {
@@ -376,14 +389,7 @@ impl Parser {
         }
 
         if self.consume(Punct::LBrace) {
-            let mut stmts = Vec::new();
-            while !self.consume(Punct::RBrace) {
-                if self.at_eof() {
-                    return error_at(self.peek().pos, "expected '}' before end of file");
-                }
-                stmts.push(self.stmt()?);
-            }
-            return Ok(Node::Block(stmts));
+            return Ok(Node::Block(self.compound_stmt()?));
         }
 
         let node = self.expr()?;
@@ -761,5 +767,13 @@ mod tests {
     #[test]
     fn tokenize_error_is_propagated() {
         assert_error("int main() { return ^@; }", "unexpected character '@'");
+    }
+
+    #[test]
+    fn declaration_as_statement() {
+        assert_error(
+            "int main() { if (1) ^int a; }",
+            "declaration is not allowed here",
+        );
     }
 }
