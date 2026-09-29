@@ -18,6 +18,7 @@ macro_rules! str_enum {
 }
 
 str_enum! {
+    // 並び順 = 一致の優先順位（2文字の記号を先に書く）
     pub enum Punct {
         Eq => "==",
         Ne => "!=",
@@ -266,5 +267,14 @@ mod tests {
     #[test]
     fn too_large_integer_literal() {
         assert_error("^99999999999999999999", "integer literal too large");
+    }
+
+    #[test]
+    fn every_keyword_is_tokenized() {
+        for &k in Keyword::ALL {
+            let toks = tokenize(k.as_str()).unwrap();
+            assert_eq!(toks[0].kind, TokenKind::Keyword(k), "{}", k.as_str());
+            assert_eq!(toks[1].kind, TokenKind::Eof, "{}", k.as_str());
+        }
     }
 }
