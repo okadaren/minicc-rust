@@ -1,4 +1,4 @@
-use crate::parse::{BinOp, Node};
+use crate::parse::{BinOp, Expr};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Type {
@@ -30,16 +30,16 @@ impl Type {
     }
 }
 
-pub fn type_of(node: &Node) -> Type {
+pub fn type_of(node: &Expr) -> Type {
     match node {
-        Node::Var { ty, .. } | Node::GVar { ty, .. } => ty.clone(),
-        Node::Addr(e) => Type::pointer_to(type_of(e)),
-        Node::Deref(e) => match type_of(e).base() {
+        Expr::Var { ty, .. } | Expr::GVar { ty, .. } => ty.clone(),
+        Expr::Addr(e) => Type::pointer_to(type_of(e)),
+        Expr::Deref(e) => match type_of(e).base() {
             Some(base) => base.clone(),
             None => unreachable!(),
         },
-        Node::Assign(lhs, _) => type_of(lhs),
-        Node::Binary(BinOp::Add | BinOp::Sub, lhs, _) => match type_of(lhs).base() {
+        Expr::Assign(lhs, _) => type_of(lhs),
+        Expr::Binary(BinOp::Add | BinOp::Sub, lhs, _) => match type_of(lhs).base() {
             Some(base) => Type::pointer_to(base.clone()),
             None => Type::Int,
         },

@@ -15,34 +15,33 @@ pub enum BinOp {
 }
 
 #[derive(Debug)]
-pub enum Node {
+pub enum Expr {
     Num(i64),
-    Var {
-        offset: i64,
-        ty: Type,
-    },
-    GVar {
-        name: String,
-        ty: Type,
-    },
-    Binary(BinOp, Box<Node>, Box<Node>),
-    Assign(Box<Node>, Box<Node>),
-    Return(Box<Node>),
+    Var { offset: i64, ty: Type },
+    GVar { name: String, ty: Type },
+    Binary(BinOp, Box<Expr>, Box<Expr>),
+    Assign(Box<Expr>, Box<Expr>),
+    Call(String, Vec<Expr>),
+    Addr(Box<Expr>),
+    Deref(Box<Expr>),
+}
+
+#[derive(Debug)]
+pub enum Stmt {
+    Expr(Expr),
+    Return(Expr),
     If {
-        cond: Box<Node>,
-        then: Box<Node>,
-        els: Option<Box<Node>>,
+        cond: Expr,
+        then: Box<Stmt>,
+        els: Option<Box<Stmt>>,
     },
     For {
-        init: Option<Box<Node>>,
-        cond: Option<Box<Node>>,
-        inc: Option<Box<Node>>,
-        body: Box<Node>,
+        init: Option<Expr>,
+        cond: Option<Expr>,
+        inc: Option<Expr>,
+        body: Box<Stmt>,
     },
-    Block(Vec<Node>),
-    Call(String, Vec<Node>),
-    Addr(Box<Node>),
-    Deref(Box<Node>),
+    Block(Vec<Stmt>),
 }
 
 struct LVar {
@@ -59,7 +58,7 @@ pub struct Param {
 pub struct Function {
     pub name: String,
     pub params: Vec<Param>,
-    pub body: Vec<Node>,
+    pub body: Vec<Stmt>,
     pub stack_size: i64,
 }
 
@@ -74,8 +73,8 @@ pub struct Program {
     pub globals: Vec<GlobalVar>,
 }
 
-fn bin(op: BinOp, l: Node, r: Node) -> Node {
-    Node::Binary(op, Box::new(l), Box::new(r))
+fn bin(op: BinOp, l: Expr, r: Expr) -> Expr {
+    Expr::Binary(op, Box::new(l), Box::new(r))
 }
 
 pub struct Parser {
@@ -87,7 +86,7 @@ pub struct Parser {
     str_count: usize,
 }
 
-fn new_add(lhs: Node, rhs: Node, pos: usize) -> Result<Node> {
+fn new_add(lhs: Expr, rhs: Expr, pos: usize) -> Result<Expr> {
     let lbase = type_of(&lhs).base().cloned();
     let rbase = type_of(&rhs).base().cloned();
     match (lbase, rbase) {
@@ -95,19 +94,19 @@ fn new_add(lhs: Node, rhs: Node, pos: usize) -> Result<Node> {
         (None, None) => Ok(bin(BinOp::Add, lhs, rhs)),
         // ポインタ + 整数
         (Some(base), None) => {
-            let scaled = bin(BinOp::Mul, rhs, Node::Num(base.size()));
+            let scaled = bin(BinOp::Mul, rhs, Expr::Num(base.size()));
             Ok(bin(BinOp::Add, lhs, scaled))
         }
         // 整数 + ポインタ
         (None, Some(base)) => {
-            let scaled = bin(BinOp::Mul, lhs, Node::Num(base.size()));
+            let scaled = bin(BinOp::Mul, lhs, Expr::Num(base.size()));
             Ok(bin(BinOp::Add, rhs, scaled))
         }
         (Some(_), Some(_)) => error_at(pos, "invalid operands to '+' (pointer + pointer)"),
     }
 }
 
-fn new_sub(lhs: Node, rhs: Node, pos: usize) -> Result<Node> {
+fn new_sub(lhs: Expr, rhs: Expr, pos: usize) -> Result<Expr> {
     let lbase = type_of(&lhs).base().cloned();
     let rbase = type_of(&rhs).base().cloned();
     match (lbase, rbase) {
@@ -115,13 +114,13 @@ fn new_sub(lhs: Node, rhs: Node, pos: usize) -> Result<Node> {
         (None, None) => Ok(bin(BinOp::Sub, lhs, rhs)),
         // ポインタ - 整数
         (Some(base), None) => {
-            let scaled = bin(BinOp::Mul, rhs, Node::Num(base.size()));
+            let scaled = bin(BinOp::Mul, rhs, Expr::Num(base.size()));
             Ok(bin(BinOp::Sub, lhs, scaled))
         }
         // ポインタ - ポインタ
         (Some(base), Some(_)) => {
             let diff = bin(BinOp::Sub, lhs, rhs);
-            Ok(bin(BinOp::Div, diff, Node::Num(base.size())))
+            Ok(bin(BinOp::Div, diff, Expr::Num(base.size())))
         }
         (None, Some(_)) => error_at(pos, "invalid operands to '-' (integer - pointer)"),
     }
@@ -322,7 +321,7 @@ impl Parser {
         Ok(())
     }
 
-    fn compound_stmt(&mut self) -> Result<Vec<Node>> {
+    fn compound_stmt(&mut self) -> Result<Vec<Stmt>> {
         let mut stmts = Vec::new();
         while !self.consume(Punct::RBrace) {
             if self.at_eof() {
@@ -337,7 +336,7 @@ impl Parser {
         Ok(stmts)
     }
 
-    fn stmt(&mut self) -> Result<Node> {
+    fn stmt(&mut self) -> Result<Stmt> {
         if self.is_typename() {
             return error_at(self.peek().pos, "declaration is not allowed here");
         }
@@ -345,12 +344,12 @@ impl Parser {
         if self.consume(Keyword::Return) {
             let node = self.expr()?;
             self.expect(Punct::Semi)?;
-            return Ok(Node::Return(Box::new(node)));
+            return Ok(Stmt::Return(node));
         }
 
         if self.consume(Keyword::If) {
             self.expect(Punct::LParen)?;
-            let cond = Box::new(self.expr()?);
+            let cond = self.expr()?;
             self.expect(Punct::RParen)?;
             let then = Box::new(self.stmt()?);
             let els = if self.consume(Keyword::Else) {
@@ -358,15 +357,15 @@ impl Parser {
             } else {
                 None
             };
-            return Ok(Node::If { cond, then, els });
+            return Ok(Stmt::If { cond, then, els });
         }
 
         if self.consume(Keyword::While) {
             self.expect(Punct::LParen)?;
-            let cond = Some(Box::new(self.expr()?));
+            let cond = Some(self.expr()?);
             self.expect(Punct::RParen)?;
             let body = Box::new(self.stmt()?);
-            return Ok(Node::For {
+            return Ok(Stmt::For {
                 init: None,
                 cond,
                 inc: None,
@@ -376,11 +375,11 @@ impl Parser {
 
         if self.consume(Keyword::For) {
             self.expect(Punct::LParen)?;
-            let init = self.opt_expr(Punct::Semi)?.map(Box::new);
-            let cond = self.opt_expr(Punct::Semi)?.map(Box::new);
-            let inc = self.opt_expr(Punct::RParen)?.map(Box::new);
+            let init = self.opt_expr(Punct::Semi)?;
+            let cond = self.opt_expr(Punct::Semi)?;
+            let inc = self.opt_expr(Punct::RParen)?;
             let body = Box::new(self.stmt()?);
-            return Ok(Node::For {
+            return Ok(Stmt::For {
                 init,
                 cond,
                 inc,
@@ -389,15 +388,15 @@ impl Parser {
         }
 
         if self.consume(Punct::LBrace) {
-            return Ok(Node::Block(self.compound_stmt()?));
+            return Ok(Stmt::Block(self.compound_stmt()?));
         }
 
         let node = self.expr()?;
         self.expect(Punct::Semi)?;
-        Ok(node)
+        Ok(Stmt::Expr(node))
     }
 
-    fn opt_expr(&mut self, end: Punct) -> Result<Option<Node>> {
+    fn opt_expr(&mut self, end: Punct) -> Result<Option<Expr>> {
         if self.consume(end) {
             return Ok(None);
         }
@@ -406,28 +405,28 @@ impl Parser {
         Ok(Some(node))
     }
 
-    fn expr(&mut self) -> Result<Node> {
+    fn expr(&mut self) -> Result<Expr> {
         self.assign()
     }
 
-    fn assign(&mut self) -> Result<Node> {
+    fn assign(&mut self) -> Result<Expr> {
         let pos = self.peek().pos;
         let node = self.equality()?;
 
         if self.consume(Punct::Assign) {
-            if !matches!(node, Node::Var { .. } | Node::GVar { .. } | Node::Deref(_)) {
+            if !matches!(node, Expr::Var { .. } | Expr::GVar { .. } | Expr::Deref(_)) {
                 return error_at(pos, "expression is not assignable");
             }
 
             if matches!(type_of(&node), Type::Array(..)) {
                 return error_at(pos, "array type is not assignable");
             }
-            return Ok(Node::Assign(Box::new(node), Box::new(self.assign()?)));
+            return Ok(Expr::Assign(Box::new(node), Box::new(self.assign()?)));
         }
         Ok(node)
     }
 
-    fn equality(&mut self) -> Result<Node> {
+    fn equality(&mut self) -> Result<Expr> {
         let mut node = self.relational()?;
 
         loop {
@@ -441,7 +440,7 @@ impl Parser {
         }
     }
 
-    fn relational(&mut self) -> Result<Node> {
+    fn relational(&mut self) -> Result<Expr> {
         let mut node = self.add()?;
 
         loop {
@@ -459,7 +458,7 @@ impl Parser {
         }
     }
 
-    fn add(&mut self) -> Result<Node> {
+    fn add(&mut self) -> Result<Expr> {
         let mut node = self.mul()?;
 
         loop {
@@ -476,7 +475,7 @@ impl Parser {
         }
     }
 
-    fn mul(&mut self) -> Result<Node> {
+    fn mul(&mut self) -> Result<Expr> {
         let mut node = self.unary()?;
 
         loop {
@@ -490,16 +489,16 @@ impl Parser {
         }
     }
 
-    fn unary(&mut self) -> Result<Node> {
+    fn unary(&mut self) -> Result<Expr> {
         if self.consume(Keyword::Sizeof) {
             let node = self.unary()?;
-            return Ok(Node::Num(type_of(&node).size()));
+            return Ok(Expr::Num(type_of(&node).size()));
         }
         if self.consume(Punct::Plus) {
             return self.unary();
         }
         if self.consume(Punct::Minus) {
-            return Ok(bin(BinOp::Sub, Node::Num(0), self.unary()?));
+            return Ok(bin(BinOp::Sub, Expr::Num(0), self.unary()?));
         }
         if self.consume(Punct::Star) {
             let pos = self.peek().pos;
@@ -507,20 +506,20 @@ impl Parser {
             if type_of(&node).base().is_none() {
                 return error_at(pos, "cannot dereference a non-pointer value");
             }
-            return Ok(Node::Deref(Box::new(node)));
+            return Ok(Expr::Deref(Box::new(node)));
         }
         if self.consume(Punct::Amp) {
             let pos = self.peek().pos;
             let node = self.unary()?;
-            if !matches!(node, Node::Var { .. } | Node::GVar { .. } | Node::Deref(_)) {
+            if !matches!(node, Expr::Var { .. } | Expr::GVar { .. } | Expr::Deref(_)) {
                 return error_at(pos, "cannot take the address of this expression");
             }
-            return Ok(Node::Addr(Box::new(node)));
+            return Ok(Expr::Addr(Box::new(node)));
         }
         self.postfix()
     }
 
-    fn postfix(&mut self) -> Result<Node> {
+    fn postfix(&mut self) -> Result<Expr> {
         let mut node = self.primary()?;
         loop {
             let pos = self.peek().pos;
@@ -533,11 +532,11 @@ impl Parser {
             if type_of(&addr).base().is_none() {
                 return error_at(pos, "subscripted value is not an array or pointer");
             }
-            node = Node::Deref(Box::new(addr))
+            node = Expr::Deref(Box::new(addr))
         }
     }
 
-    fn primary(&mut self) -> Result<Node> {
+    fn primary(&mut self) -> Result<Expr> {
         if self.consume(Punct::LParen) {
             let node = self.expr()?;
             self.expect(Punct::RParen)?;
@@ -556,7 +555,7 @@ impl Parser {
                 ty: ty.clone(),
                 init: Some(bytes),
             });
-            return Ok(Node::GVar { name, ty });
+            return Ok(Expr::GVar { name, ty });
         }
 
         let pos = self.peek().pos;
@@ -572,23 +571,23 @@ impl Parser {
                 if args.len() > 6 {
                     return error_at(pos, "too many arguments (max 6)");
                 }
-                return Ok(Node::Call(name, args));
+                return Ok(Expr::Call(name, args));
             }
             if let Some(var) = self.find_var(&name) {
-                return Ok(Node::Var {
+                return Ok(Expr::Var {
                     offset: var.offset,
                     ty: var.ty.clone(),
                 });
             }
             if let Some(g) = self.globals.iter().find(|g| g.name == name) {
-                return Ok(Node::GVar {
+                return Ok(Expr::GVar {
                     name,
                     ty: g.ty.clone(),
                 });
             }
             return error_at(pos, format!("undefined variable '{}'", name));
         }
-        Ok(Node::Num(self.expect_number()?))
+        Ok(Expr::Num(self.expect_number()?))
     }
 }
 
