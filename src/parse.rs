@@ -15,15 +15,89 @@ pub enum BinOp {
 }
 
 #[derive(Debug)]
-pub enum Expr {
+pub struct Expr {
+    pub kind: ExprKind,
+    pub ty: Type,
+}
+
+#[derive(Debug)]
+pub enum ExprKind {
     Num(i64),
-    Var { offset: i64, ty: Type },
-    GVar { name: String, ty: Type },
+    Var { offset: i64 },
+    GVar { name: String },
     Binary(BinOp, Box<Expr>, Box<Expr>),
     Assign(Box<Expr>, Box<Expr>),
     Call(String, Vec<Expr>),
     Addr(Box<Expr>),
     Deref(Box<Expr>),
+}
+
+impl Expr {
+    pub fn num(n: i64) -> Expr {
+        Expr {
+            kind: ExprKind::Num(n),
+            ty: Type::Int,
+        }
+    }
+
+    pub fn var(offset: i64, ty: Type) -> Expr {
+        Expr {
+            kind: ExprKind::Var { offset },
+            ty,
+        }
+    }
+
+    pub fn gvar(name: String, ty: Type) -> Expr {
+        Expr {
+            kind: ExprKind::GVar { name },
+            ty,
+        }
+    }
+
+    pub fn addr(e: Expr) -> Expr {
+        let ty = e.ty.clone();
+        Expr {
+            kind: ExprKind::Addr(Box::new(e)),
+            ty: Type::pointer_to(ty),
+        }
+    }
+
+    pub fn assign(lhs: Expr, rhs: Expr) -> Expr {
+        let ty = lhs.ty.clone();
+        Expr {
+            kind: ExprKind::Assign(Box::new(lhs), Box::new(rhs)),
+            ty,
+        }
+    }
+
+    pub fn call(name: String, args: Vec<Expr>) -> Expr {
+        Expr {
+            kind: ExprKind::Call(name, args),
+            ty: Type::Int,
+        }
+    }
+
+    pub fn binary(op: BinOp, lhs: Expr, rhs: Expr) -> Expr {
+        let ty = match op {
+            BinOp::Add | BinOp::Sub => match lhs.ty.base() {
+                Some(base) => Type::pointer_to(base.clone()),
+                None => Type::Int,
+            },
+            _ => Type::Int,
+        };
+        Expr {
+            kind: ExprKind::Binary(op, Box::new(lhs), Box::new(rhs)),
+            ty,
+        }
+    }
+
+    pub fn deref(e: Expr) -> Option<Expr> {
+        let ty = e.ty.base()?.clone();
+        Some(Expr {
+            kind: ExprKind::Deref(Box::new(e)),
+            ty,
+        })
+    }
 }
 
 #[derive(Debug)]
@@ -73,10 +147,6 @@ pub struct Program {
     pub globals: Vec<GlobalVar>,
 }
 
-fn bin(op: BinOp, l: Expr, r: Expr) -> Expr {
-    Expr::Binary(op, Box::new(l), Box::new(r))
-}
-
 pub struct Parser {
     toks: Vec<Token>,
     pos: usize,
@@ -91,16 +161,16 @@ fn new_add(lhs: Expr, rhs: Expr, pos: usize) -> Result<Expr> {
     let rbase = type_of(&rhs).base().cloned();
     match (lbase, rbase) {
         // 整数 + 整数
-        (None, None) => Ok(bin(BinOp::Add, lhs, rhs)),
+        (None, None) => Ok(Expr::binary(BinOp::Add, lhs, rhs)),
         // ポインタ + 整数
         (Some(base), None) => {
-            let scaled = bin(BinOp::Mul, rhs, Expr::Num(base.size()));
-            Ok(bin(BinOp::Add, lhs, scaled))
+            let scaled = Expr::binary(BinOp::Mul, rhs, Expr::num(base.size()));
+            Ok(Expr::binary(BinOp::Add, lhs, scaled))
         }
         // 整数 + ポインタ
         (None, Some(base)) => {
-            let scaled = bin(BinOp::Mul, lhs, Expr::Num(base.size()));
-            Ok(bin(BinOp::Add, rhs, scaled))
+            let scaled = Expr::binary(BinOp::Mul, lhs, Expr::num(base.size()));
+            Ok(Expr::binary(BinOp::Add, rhs, scaled))
         }
         (Some(_), Some(_)) => error_at(pos, "invalid operands to '+' (pointer + pointer)"),
     }
@@ -111,16 +181,16 @@ fn new_sub(lhs: Expr, rhs: Expr, pos: usize) -> Result<Expr> {
     let rbase = type_of(&rhs).base().cloned();
     match (lbase, rbase) {
         // 整数 - 整数
-        (None, None) => Ok(bin(BinOp::Sub, lhs, rhs)),
+        (None, None) => Ok(Expr::binary(BinOp::Sub, lhs, rhs)),
         // ポインタ - 整数
         (Some(base), None) => {
-            let scaled = bin(BinOp::Mul, rhs, Expr::Num(base.size()));
-            Ok(bin(BinOp::Sub, lhs, scaled))
+            let scaled = Expr::binary(BinOp::Mul, rhs, Expr::num(base.size()));
+            Ok(Expr::binary(BinOp::Sub, lhs, scaled))
         }
         // ポインタ - ポインタ
         (Some(base), Some(_)) => {
-            let diff = bin(BinOp::Sub, lhs, rhs);
-            Ok(bin(BinOp::Div, diff, Expr::Num(base.size())))
+            let diff = Expr::binary(BinOp::Sub, lhs, rhs);
+            Ok(Expr::binary(BinOp::Div, diff, Expr::num(base.size())))
         }
         (None, Some(_)) => error_at(pos, "invalid operands to '-' (integer - pointer)"),
     }
@@ -414,14 +484,17 @@ impl Parser {
         let node = self.equality()?;
 
         if self.consume(Punct::Assign) {
-            if !matches!(node, Expr::Var { .. } | Expr::GVar { .. } | Expr::Deref(_)) {
+            if !matches!(
+                node.kind,
+                ExprKind::Var { .. } | ExprKind::GVar { .. } | ExprKind::Deref(_)
+            ) {
                 return error_at(pos, "expression is not assignable");
             }
 
             if matches!(type_of(&node), Type::Array(..)) {
                 return error_at(pos, "array type is not assignable");
             }
-            return Ok(Expr::Assign(Box::new(node), Box::new(self.assign()?)));
+            return Ok(Expr::assign(node, self.assign()?));
         }
         Ok(node)
     }
@@ -431,9 +504,9 @@ impl Parser {
 
         loop {
             if self.consume(Punct::Eq) {
-                node = bin(BinOp::Eq, node, self.relational()?);
+                node = Expr::binary(BinOp::Eq, node, self.relational()?);
             } else if self.consume(Punct::Ne) {
-                node = bin(BinOp::Ne, node, self.relational()?);
+                node = Expr::binary(BinOp::Ne, node, self.relational()?);
             } else {
                 return Ok(node);
             }
@@ -445,13 +518,13 @@ impl Parser {
 
         loop {
             if self.consume(Punct::Lt) {
-                node = bin(BinOp::Lt, node, self.add()?);
+                node = Expr::binary(BinOp::Lt, node, self.add()?);
             } else if self.consume(Punct::Le) {
-                node = bin(BinOp::Le, node, self.add()?);
+                node = Expr::binary(BinOp::Le, node, self.add()?);
             } else if self.consume(Punct::Gt) {
-                node = bin(BinOp::Lt, self.add()?, node);
+                node = Expr::binary(BinOp::Lt, self.add()?, node);
             } else if self.consume(Punct::Ge) {
-                node = bin(BinOp::Le, self.add()?, node);
+                node = Expr::binary(BinOp::Le, self.add()?, node);
             } else {
                 return Ok(node);
             }
@@ -480,9 +553,9 @@ impl Parser {
 
         loop {
             if self.consume(Punct::Star) {
-                node = bin(BinOp::Mul, node, self.unary()?);
+                node = Expr::binary(BinOp::Mul, node, self.unary()?);
             } else if self.consume(Punct::Slash) {
-                node = bin(BinOp::Div, node, self.unary()?);
+                node = Expr::binary(BinOp::Div, node, self.unary()?);
             } else {
                 return Ok(node);
             }
@@ -492,29 +565,32 @@ impl Parser {
     fn unary(&mut self) -> Result<Expr> {
         if self.consume(Keyword::Sizeof) {
             let node = self.unary()?;
-            return Ok(Expr::Num(type_of(&node).size()));
+            return Ok(Expr::num(type_of(&node).size()));
         }
         if self.consume(Punct::Plus) {
             return self.unary();
         }
         if self.consume(Punct::Minus) {
-            return Ok(bin(BinOp::Sub, Expr::Num(0), self.unary()?));
+            return Ok(Expr::binary(BinOp::Sub, Expr::num(0), self.unary()?));
         }
         if self.consume(Punct::Star) {
             let pos = self.peek().pos;
             let node = self.unary()?;
-            if type_of(&node).base().is_none() {
+            let Some(node) = Expr::deref(node) else {
                 return error_at(pos, "cannot dereference a non-pointer value");
-            }
-            return Ok(Expr::Deref(Box::new(node)));
+            };
+            return Ok(node);
         }
         if self.consume(Punct::Amp) {
             let pos = self.peek().pos;
             let node = self.unary()?;
-            if !matches!(node, Expr::Var { .. } | Expr::GVar { .. } | Expr::Deref(_)) {
+            if !matches!(
+                node.kind,
+                ExprKind::Var { .. } | ExprKind::GVar { .. } | ExprKind::Deref(_)
+            ) {
                 return error_at(pos, "cannot take the address of this expression");
             }
-            return Ok(Expr::Addr(Box::new(node)));
+            return Ok(Expr::addr(node));
         }
         self.postfix()
     }
@@ -529,10 +605,10 @@ impl Parser {
             let index = self.expr()?;
             self.expect(Punct::RBracket)?;
             let addr = new_add(node, index, pos)?;
-            if type_of(&addr).base().is_none() {
+            let Some(addr) = Expr::deref(addr) else {
                 return error_at(pos, "subscripted value is not an array or pointer");
-            }
-            node = Expr::Deref(Box::new(addr))
+            };
+            node = addr;
         }
     }
 
@@ -555,7 +631,7 @@ impl Parser {
                 ty: ty.clone(),
                 init: Some(bytes),
             });
-            return Ok(Expr::GVar { name, ty });
+            return Ok(Expr::gvar(name, ty));
         }
 
         let pos = self.peek().pos;
@@ -571,23 +647,17 @@ impl Parser {
                 if args.len() > 6 {
                     return error_at(pos, "too many arguments (max 6)");
                 }
-                return Ok(Expr::Call(name, args));
+                return Ok(Expr::call(name, args));
             }
             if let Some(var) = self.find_var(&name) {
-                return Ok(Expr::Var {
-                    offset: var.offset,
-                    ty: var.ty.clone(),
-                });
+                return Ok(Expr::var(var.offset, var.ty.clone()));
             }
             if let Some(g) = self.globals.iter().find(|g| g.name == name) {
-                return Ok(Expr::GVar {
-                    name,
-                    ty: g.ty.clone(),
-                });
+                return Ok(Expr::gvar(name, g.ty.clone()));
             }
             return error_at(pos, format!("undefined variable '{}'", name));
         }
-        Ok(Expr::Num(self.expect_number()?))
+        Ok(Expr::num(self.expect_number()?))
     }
 }
 

@@ -1,5 +1,5 @@
 use crate::{
-    parse::{BinOp, Expr, Function, Param, Program, Stmt},
+    parse::{BinOp, Expr, ExprKind, Function, Param, Program, Stmt},
     types::{Type, type_of},
 };
 
@@ -31,10 +31,10 @@ impl Codegen {
     }
 
     fn gen_addr(&mut self, node: &Expr) {
-        match node {
-            Expr::Var { offset, .. } => println!("  lea rax, [rbp-{}]", offset),
-            Expr::GVar { name, .. } => println!("  lea rax, [rip+{}]", name),
-            Expr::Deref(e) => self.gen_expr(e),
+        match &node.kind {
+            ExprKind::Var { offset } => println!("  lea rax, [rbp-{}]", offset),
+            ExprKind::GVar { name } => println!("  lea rax, [rip+{}]", name),
+            ExprKind::Deref(e) => self.gen_expr(e),
             _ => unreachable!(),
         }
     }
@@ -58,24 +58,24 @@ impl Codegen {
     }
 
     fn gen_expr(&mut self, node: &Expr) {
-        match node {
-            Expr::Num(n) => println!("  mov rax, {}", n),
-            Expr::Var { ty, .. } | Expr::GVar { ty, .. } => {
+        match &node.kind {
+            ExprKind::Num(n) => println!("  mov rax, {}", n),
+            ExprKind::Var { .. } | ExprKind::GVar { .. } => {
                 self.gen_addr(node);
-                self.load(ty);
+                self.load(&node.ty);
             }
-            Expr::Addr(e) => self.gen_addr(e),
-            Expr::Deref(e) => {
+            ExprKind::Addr(e) => self.gen_addr(e),
+            ExprKind::Deref(e) => {
                 self.gen_expr(e);
                 self.load(&type_of(node));
             }
-            Expr::Assign(lhs, rhs) => {
+            ExprKind::Assign(lhs, rhs) => {
                 self.gen_addr(lhs);
                 self.push();
                 self.gen_expr(rhs);
                 self.store(&type_of(lhs));
             }
-            Expr::Call(name, args) => {
+            ExprKind::Call(name, args) => {
                 for arg in args {
                     self.gen_expr(arg);
                     self.push();
@@ -93,7 +93,7 @@ impl Codegen {
                 }
                 println!("  movsxd rax, eax");
             }
-            Expr::Binary(op, lhs, rhs) => {
+            ExprKind::Binary(op, lhs, rhs) => {
                 self.gen_expr(rhs);
                 self.push();
                 self.gen_expr(lhs);
